@@ -17,7 +17,7 @@ interface FoodItem {
   image: string;
 }
 
-type Tab = 'charges' | 'items';
+type Tab = 'charges' | 'items' | 'orders' | 'past-orders';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<Tab>('charges');
@@ -26,6 +26,9 @@ export default function AdminPage() {
     packingCharge: 2.00,
   });
   const [items, setItems] = useState<FoodItem[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [pastOrders, setPastOrders] = useState<any[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -48,7 +51,26 @@ export default function AdminPage() {
   useEffect(() => {
     fetchCharges();
     fetchItems();
+    fetchOrders();
+    fetchPastOrders();
   }, []);
+
+  // Auto-refresh orders every 5 seconds
+  useEffect(() => {
+    if (activeTab === 'orders') {
+      const interval = setInterval(() => {
+        fetchOrders();
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
+
+  // Fetch past orders when date changes
+  useEffect(() => {
+    if (activeTab === 'past-orders') {
+      fetchPastOrders(selectedDate);
+    }
+  }, [selectedDate, activeTab]);
 
   const fetchCharges = async () => {
     try {
@@ -73,6 +95,58 @@ export default function AdminPage() {
       }
     } catch (error) {
       console.error('Error fetching items:', error);
+    }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('/api/orders?type=active');
+      if (response.ok) {
+        const data = await response.json();
+        setOrders(data);
+      }
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    }
+  };
+
+  const fetchPastOrders = async (date?: string) => {
+    try {
+      const dateToUse = date || selectedDate;
+      const response = await fetch(`/api/orders?type=past&date=${dateToUse}`);
+      if (response.ok) {
+        const data = await response.json();
+        // Filter by date if provided
+        const filtered = dateToUse 
+          ? data.filter((order: any) => order.orderDate === dateToUse)
+          : data;
+        setPastOrders(filtered);
+      }
+    } catch (error) {
+      console.error('Error fetching past orders:', error);
+    }
+  };
+
+  const updateOrderStatus = async (orderId: string, status: string) => {
+    try {
+      const response = await fetch('/api/orders', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId, status }),
+      });
+
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Order status updated successfully!' });
+        fetchOrders();
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to update order status' });
+      }
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      setMessage({ type: 'error', text: 'Error updating order status' });
     }
   };
 
@@ -339,6 +413,34 @@ export default function AdminPage() {
               }`}
             >
               Items
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('orders');
+                setMessage(null);
+                fetchOrders();
+              }}
+              className={`px-6 py-3 font-semibold transition-colors ${
+                activeTab === 'orders'
+                  ? 'text-sky-500 border-b-2 border-sky-500'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              Orders
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('past-orders');
+                setMessage(null);
+                fetchPastOrders();
+              }}
+              className={`px-6 py-3 font-semibold transition-colors ${
+                activeTab === 'past-orders'
+                  ? 'text-sky-500 border-b-2 border-sky-500'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              Past Orders
             </button>
           </div>
 
@@ -716,6 +818,239 @@ export default function AdminPage() {
                 {items.length === 0 && (
                   <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
                     <p className="text-gray-600">No items yet. Add your first item above!</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Orders Tab */}
+          {activeTab === 'orders' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm">
+                <h2 className="text-2xl font-bold text-black mb-6">Active Orders</h2>
+                
+                {orders.length === 0 ? (
+                  <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
+                    <p className="text-gray-600">No active orders at the moment.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {orders.map((order) => (
+                      <div
+                        key={order._id}
+                        className="bg-gray-50 rounded-xl border-2 border-gray-200 p-5 hover:border-sky-200 transition-colors"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-lg font-bold text-black">
+                                Order #{order.dailyOrderId}
+                              </h3>
+                              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                order.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                order.status === 'being_prepared' ? 'bg-blue-100 text-blue-800' :
+                                order.status === 'prepared' ? 'bg-green-100 text-green-800' :
+                                order.status === 'ready_for_pickup' ? 'bg-cyan-100 text-cyan-800' :
+                                order.status === 'out_for_delivery' ? 'bg-purple-100 text-purple-800' :
+                                'bg-gray-100 text-gray-800'
+                              }`}>
+                                {order.status === 'pending' ? 'Pending' :
+                                 order.status === 'being_prepared' ? 'Being Prepared' :
+                                 order.status === 'prepared' ? 'Prepared' :
+                                 order.status === 'ready_for_pickup' ? 'Ready for Pickup' :
+                                 order.status === 'out_for_delivery' ? 'Out for Delivery' :
+                                 'Unknown'}
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-600">
+                              {new Date(order.createdAt).toLocaleString('en-IN')}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Customer:</span> {order.customerName}
+                          </p>
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Contact:</span> {order.contactNumber}
+                          </p>
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Order Type:</span>{' '}
+                            <span className="capitalize">{order.orderType}</span>
+                          </p>
+                          {order.deliveryAddress && (
+                            <p className="text-sm text-black mb-1">
+                              <span className="font-semibold">Address:</span> {order.deliveryAddress}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-sm font-semibold text-black mb-2">Items:</p>
+                          <div className="space-y-1">
+                            {order.items?.map((item: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-sm text-black bg-white p-2 rounded">
+                                <span>{item.name} × {item.quantity}</span>
+                                <span className="font-semibold">Rs {(item.price * item.quantity).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center mb-4 pt-3 border-t-2 border-gray-200">
+                          <span className="text-sm font-semibold text-black">Total:</span>
+                          <span className="text-lg font-bold text-sky-500">Rs {order.total?.toFixed(2)}</span>
+                        </div>
+
+                        <div className="flex gap-2 flex-wrap">
+                          {order.status === 'pending' && (
+                            <button
+                              onClick={() => updateOrderStatus(order._id, 'being_prepared')}
+                              className="px-4 py-2 bg-blue-200 text-blue-800 rounded-lg hover:bg-blue-300 transition-colors text-sm font-semibold"
+                            >
+                              Start Preparing
+                            </button>
+                          )}
+                          {order.status === 'being_prepared' && (
+                            <button
+                              onClick={() => updateOrderStatus(order._id, 'prepared')}
+                              className="px-4 py-2 bg-green-200 text-green-800 rounded-lg hover:bg-green-300 transition-colors text-sm font-semibold"
+                            >
+                              Mark as Prepared
+                            </button>
+                          )}
+                          {order.status === 'prepared' && (
+                            <>
+                              {(order.orderType === 'dine_in' || order.orderType === 'takeaway') && (
+                                <button
+                                  onClick={() => updateOrderStatus(order._id, 'ready_for_pickup')}
+                                  className="px-4 py-2 bg-cyan-200 text-cyan-800 rounded-lg hover:bg-cyan-300 transition-colors text-sm font-semibold"
+                                >
+                                  Ready for Pickup
+                                </button>
+                              )}
+                              {order.orderType === 'delivery' && (
+                                <button
+                                  onClick={() => updateOrderStatus(order._id, 'out_for_delivery')}
+                                  className="px-4 py-2 bg-purple-200 text-purple-800 rounded-lg hover:bg-purple-300 transition-colors text-sm font-semibold"
+                                >
+                                  Mark Out for Delivery
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {order.status === 'ready_for_pickup' && (
+                            <button
+                              onClick={() => updateOrderStatus(order._id, 'delivered')}
+                              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
+                            >
+                              Mark as Delivered
+                            </button>
+                          )}
+                          {order.status === 'out_for_delivery' && (
+                            <button
+                              onClick={() => updateOrderStatus(order._id, 'delivered')}
+                              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
+                            >
+                              Mark as Delivered
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Past Orders Tab */}
+          {activeTab === 'past-orders' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-black">Past Orders</h2>
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-semibold text-black">Filter by Date:</label>
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                      className="px-4 py-2 border-2 border-gray-200 rounded-lg text-black focus:border-sky-300 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                
+                {pastOrders.length === 0 ? (
+                  <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
+                    <p className="text-gray-600">No past orders found for the selected date.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {pastOrders.map((order) => (
+                      <div
+                        key={order._id}
+                        className="bg-gray-50 rounded-xl border-2 border-gray-200 p-5 hover:border-green-200 transition-colors"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-lg font-bold text-black">
+                                Order #{order.dailyOrderId}
+                              </h3>
+                              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">
+                                Delivered
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-600">
+                              {new Date(order.createdAt).toLocaleString('en-IN')}
+                            </p>
+                            {order.updatedAt && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Delivered: {new Date(order.updatedAt).toLocaleString('en-IN')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Customer:</span> {order.customerName}
+                          </p>
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Contact:</span> {order.contactNumber}
+                          </p>
+                          <p className="text-sm text-black mb-1">
+                            <span className="font-semibold">Order Type:</span>{' '}
+                            <span className="capitalize">{order.orderType}</span>
+                          </p>
+                          {order.deliveryAddress && (
+                            <p className="text-sm text-black mb-1">
+                              <span className="font-semibold">Address:</span> {order.deliveryAddress}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-sm font-semibold text-black mb-2">Items:</p>
+                          <div className="space-y-1">
+                            {order.items?.map((item: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-sm text-black bg-white p-2 rounded">
+                                <span>{item.name} × {item.quantity}</span>
+                                <span className="font-semibold">Rs {(item.price * item.quantity).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-3 border-t-2 border-gray-200">
+                          <span className="text-sm font-semibold text-black">Total:</span>
+                          <span className="text-lg font-bold text-green-600">Rs {order.total?.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

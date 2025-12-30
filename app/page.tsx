@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import Image from 'next/image';
+import html2canvas from 'html2canvas';
 
 // Food item types
 type Category = 'retail' | 'produce';
@@ -34,6 +35,10 @@ export default function Home() {
   const [packingCharge, setPackingCharge] = useState(2.00);
   const [foodItems, setFoodItems] = useState<FoodItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(true);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [orderReceipt, setOrderReceipt] = useState<any>(null);
+  const [lastOrderStatus, setLastOrderStatus] = useState<string | null>(null);
+  const [lastOrderContact, setLastOrderContact] = useState<string>('');
 
   // Fetch items function (can be called from anywhere)
   const fetchItems = useCallback(async () => {
@@ -44,7 +49,6 @@ export default function Home() {
       });
       if (response.ok) {
         const data = await response.json();
-        console.log('Fetched items:', data); // Debug log
         setFoodItems(data);
       } else {
         console.error('Failed to fetch items:', response.status);
@@ -55,6 +59,76 @@ export default function Home() {
       setItemsLoading(false);
     }
   }, []);
+
+  // Request notification permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Poll for order status updates
+  useEffect(() => {
+    if (!lastOrderContact) return;
+
+    const checkOrderStatus = async () => {
+      try {
+        const response = await fetch(`/api/orders/check-status?contact=${encodeURIComponent(lastOrderContact)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.order && data.order.status !== lastOrderStatus) {
+            const newStatus = data.order.status;
+            setLastOrderStatus(newStatus);
+
+            // Send notification based on status
+            if ('Notification' in window && Notification.permission === 'granted') {
+              let title = '';
+              let body = '';
+
+              switch (newStatus) {
+                case 'being_prepared':
+                  title = '🍳 Order Being Prepared';
+                  body = `Order #${data.order.dailyOrderId} is now being prepared!`;
+                  break;
+                case 'prepared':
+                  title = '✅ Order Prepared';
+                  body = `Order #${data.order.dailyOrderId} is ready!`;
+                  break;
+                case 'ready_for_pickup':
+                  title = '📦 Ready for Pickup';
+                  body = `Order #${data.order.dailyOrderId} is ready for pickup!`;
+                  break;
+                case 'out_for_delivery':
+                  title = '🚚 Out for Delivery';
+                  body = `Order #${data.order.dailyOrderId} is out for delivery!`;
+                  break;
+                case 'delivered':
+                  title = '🎉 Order Delivered';
+                  body = `Order #${data.order.dailyOrderId} has been delivered! Thank you!`;
+                  break;
+                default:
+                  return;
+              }
+
+              new Notification(title, {
+                body,
+                icon: '/favicon.ico',
+                badge: '/favicon.ico',
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking order status:', error);
+      }
+    };
+
+    // Check immediately, then every 10 seconds
+    checkOrderStatus();
+    const interval = setInterval(checkOrderStatus, 10000);
+
+    return () => clearInterval(interval);
+  }, [lastOrderContact, lastOrderStatus]);
 
   // Fetch charges and items from API
   useEffect(() => {
@@ -107,15 +181,13 @@ export default function Home() {
 
   // Filter and search food items
   const filteredItems = useMemo(() => {
-    const filtered = foodItems.filter(item => {
+    return foodItems.filter(item => {
       const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'all' || item.category === selectedCategory;
       const matchesSubCategory = selectedSubCategory === 'all' || item.subCategory.toLowerCase() === selectedSubCategory.toLowerCase();
       
       return matchesSearch && matchesCategory && matchesSubCategory;
     });
-    console.log('Filtered items:', filtered, 'Total items:', foodItems.length); // Debug log
-    return filtered;
   }, [searchQuery, selectedCategory, selectedSubCategory, foodItems]);
 
   // Add item to cart
@@ -170,6 +242,187 @@ export default function Home() {
   const cartItemCount = useMemo(() => {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
+
+  // Handle Razorpay payment
+  const handlePayment = async () => {
+    // Validate all required fields
+    if (!orderType) {
+      alert('Please select an order type');
+      return;
+    }
+    if (!customerName.trim()) {
+      alert('Please enter your name');
+      return;
+    }
+    if (!contactNumber.trim()) {
+      alert('Please enter your contact number');
+      return;
+    }
+    if (orderType === 'delivery' && !deliveryAddress.trim()) {
+      alert('Please enter your delivery address');
+      return;
+    }
+
+    try {
+      // Create Razorpay order
+      const response = await fetch('/api/payment/create-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: cartTotal,
+          currency: 'INR',
+          receipt: `order_${Date.now()}`,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        alert(error.error || 'Failed to create payment order');
+        return;
+      }
+
+      const { orderId } = await response.json();
+
+      // Get Razorpay key from API
+      const keyResponse = await fetch('/api/payment/get-key');
+      if (!keyResponse.ok) {
+        alert('Payment gateway configuration error. Please contact support.');
+        return;
+      }
+      const { key } = await keyResponse.json();
+
+      if (!key) {
+        alert('Payment gateway configuration error. Please contact support.');
+        return;
+      }
+
+      // Initialize Razorpay checkout
+      const options = {
+        key: key,
+        amount: Math.round(cartTotal * 100), // Convert to paise
+        currency: 'INR',
+        name: 'Mr. Pizzeria',
+        description: `Order for ${customerName}`,
+        order_id: orderId,
+        handler: async function (response: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) {
+          // Payment successful
+          try {
+            const verifyResponse = await fetch('/api/payment/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                orderData: {
+                  orderType,
+                  customerName,
+                  contactNumber,
+                  deliveryAddress: orderType === 'delivery' ? deliveryAddress : null,
+                  items: cart,
+                  subtotal: cartSubtotal,
+                  deliveryCharge: orderType === 'delivery' ? deliveryCharge : 0,
+                  packingCharge: orderType === 'delivery' || orderType === 'takeaway' ? packingCharge : 0,
+                  total: cartTotal,
+                },
+              }),
+            });
+
+            if (verifyResponse.ok) {
+              const result = await verifyResponse.json();
+              
+              // Show notification
+              if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('Order Placed Successfully! 🎉', {
+                  body: `Order #${result.dailyOrderId} has been placed successfully. Total: Rs ${cartTotal.toFixed(2)}`,
+                  icon: '/favicon.ico',
+                  badge: '/favicon.ico',
+                });
+              } else if ('Notification' in window && Notification.permission !== 'denied') {
+                Notification.requestPermission().then((permission) => {
+                  if (permission === 'granted') {
+                    new Notification('Order Placed Successfully! 🎉', {
+                      body: `Order #${result.dailyOrderId} has been placed successfully. Total: Rs ${cartTotal.toFixed(2)}`,
+                      icon: '/favicon.ico',
+                      badge: '/favicon.ico',
+                    });
+                  }
+                });
+              }
+
+              // Set receipt data
+              setOrderReceipt({
+                dailyOrderId: result.dailyOrderId,
+                orderDate: result.orderDate,
+                orderType,
+                customerName,
+                contactNumber,
+                deliveryAddress: orderType === 'delivery' ? deliveryAddress : null,
+                items: cart,
+                subtotal: cartSubtotal,
+                deliveryCharge: orderType === 'delivery' ? deliveryCharge : 0,
+                packingCharge: orderType === 'delivery' || orderType === 'takeaway' ? packingCharge : 0,
+                total: cartTotal,
+                razorpayOrderId: result.razorpayOrderId,
+                paymentId: result.paymentId,
+              });
+
+              // Track order for status updates
+              setLastOrderStatus('pending');
+              setLastOrderContact(contactNumber);
+
+              // Close cart and show receipt
+              setShowCart(false);
+              setShowReceipt(true);
+              
+              // Reset form and cart (but keep contact number for tracking)
+              setCart([]);
+              setOrderType('');
+              setCustomerName('');
+              setDeliveryAddress('');
+            } else {
+              const error = await verifyResponse.json();
+              alert('Payment verification failed: ' + (error.error || 'Unknown error'));
+            }
+          } catch (error) {
+            console.error('Error verifying payment:', error);
+            alert('Error verifying payment. Please contact support.');
+          }
+        },
+        prefill: {
+          name: customerName,
+          contact: contactNumber,
+          email: '',
+        },
+        theme: {
+          color: '#0ea5e9', // Sky color
+        },
+        modal: {
+          ondismiss: function() {
+            console.log('Payment cancelled');
+          },
+        },
+      };
+
+      // Check if Razorpay is loaded
+      if (typeof window !== 'undefined' && window.Razorpay) {
+        const razorpay = new window.Razorpay(options);
+        razorpay.on('payment.failed', function (response: { error: { description?: string } }) {
+          alert(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+        });
+        razorpay.open();
+      } else {
+        alert('Payment gateway is loading. Please try again in a moment.');
+      }
+    } catch (error) {
+      console.error('Error initiating payment:', error);
+      alert('Error initiating payment. Please try again.');
+    }
+  };
 
   // Get subcategories based on selected category (dynamic from items)
   const getSubCategories = (): SubCategory[] => {
@@ -628,42 +881,10 @@ export default function Home() {
 
                   {/* Checkout Button */}
                   <button
-                    onClick={() => {
-                      // Validate all required fields
-                      if (!orderType) {
-                        alert('Please select an order type');
-                        return;
-                      }
-                      if (!customerName.trim()) {
-                        alert('Please enter your name');
-                        return;
-                      }
-                      if (!contactNumber.trim()) {
-                        alert('Please enter your contact number');
-                        return;
-                      }
-                      if (orderType === 'delivery' && !deliveryAddress.trim()) {
-                        alert('Please enter your delivery address');
-                        return;
-                      }
-                      // Here you would typically send the order data to your backend
-                      const chargesText = orderType === 'delivery' 
-                        ? `\nDelivery Charge: Rs ${deliveryCharge.toFixed(2)}\nPacking Charge: Rs ${packingCharge.toFixed(2)}`
-                        : orderType === 'takeaway' 
-                        ? `\nPacking Charge: Rs ${packingCharge.toFixed(2)}`
-                        : '';
-                      alert(`Order placed successfully!\nOrder Type: ${orderType}\nName: ${customerName}\nContact: ${contactNumber}${orderType === 'delivery' ? `\nAddress: ${deliveryAddress}` : ''}\nSubtotal: Rs ${cartSubtotal.toFixed(2)}${chargesText}\nTotal: Rs ${cartTotal.toFixed(2)}`);
-                      // Reset form and cart
-                      setCart([]);
-                      setOrderType('');
-                      setCustomerName('');
-                      setContactNumber('');
-                      setDeliveryAddress('');
-                      setShowCart(false);
-                    }}
+                    onClick={handlePayment}
                     className="w-full bg-gradient-to-r from-sky-300 to-cyan-300 text-white py-3 rounded-xl hover:from-sky-400 hover:to-cyan-400 transition-all font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
                   >
-                    🛒 Proceed to Checkout
+                    💳 Pay with Razorpay
                   </button>
                 </div>
               </div>
@@ -680,6 +901,154 @@ export default function Home() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Receipt Modal */}
+      {showReceipt && orderReceipt && (
+        <div className="fixed inset-0 bg-gray-300 bg-opacity-30 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" id="receipt">
+            {/* Receipt Header */}
+            <div className="p-6 border-b-2 border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-3xl font-bold text-black">🍕 Mr. Pizzeria</h2>
+                  <p className="text-sm text-gray-600">Order Receipt</p>
+                </div>
+                <button
+                  onClick={() => setShowReceipt(false)}
+                  className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-black text-2xl font-light transition-colors"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex items-center gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600">Order #</span>
+                  <span className="font-bold text-black ml-1">{orderReceipt.dailyOrderId}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Date:</span>
+                  <span className="font-semibold text-black ml-1">
+                    {new Date(orderReceipt.orderDate).toLocaleDateString('en-IN', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Receipt Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Customer Info */}
+              <div className="mb-6">
+                <h3 className="font-bold text-black mb-2">Customer Details</h3>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-1 text-sm">
+                  <p><span className="font-semibold">Name:</span> {orderReceipt.customerName}</p>
+                  <p><span className="font-semibold">Contact:</span> {orderReceipt.contactNumber}</p>
+                  <p><span className="font-semibold">Order Type:</span> <span className="capitalize">{orderReceipt.orderType}</span></p>
+                  {orderReceipt.deliveryAddress && (
+                    <p><span className="font-semibold">Address:</span> {orderReceipt.deliveryAddress}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Order Items */}
+              <div className="mb-6">
+                <h3 className="font-bold text-black mb-3">Order Items</h3>
+                <div className="space-y-2">
+                  {orderReceipt.items.map((item: CartItem) => (
+                    <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div className="flex-1">
+                        <p className="font-semibold text-black">{item.name}</p>
+                        <p className="text-xs text-gray-600">Qty: {item.quantity} × Rs {item.price.toFixed(2)}</p>
+                      </div>
+                      <p className="font-bold text-sky-500">Rs {(item.price * item.quantity).toFixed(2)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Price Breakdown */}
+              <div className="border-t-2 border-gray-200 pt-4 space-y-2">
+                <div className="flex justify-between text-black">
+                  <span>Subtotal:</span>
+                  <span className="font-semibold">Rs {orderReceipt.subtotal.toFixed(2)}</span>
+                </div>
+                {orderReceipt.deliveryCharge > 0 && (
+                  <div className="flex justify-between text-black">
+                    <span>Delivery Charge:</span>
+                    <span className="font-semibold">Rs {orderReceipt.deliveryCharge.toFixed(2)}</span>
+                  </div>
+                )}
+                {orderReceipt.packingCharge > 0 && (
+                  <div className="flex justify-between text-black">
+                    <span>Packing Charge:</span>
+                    <span className="font-semibold">Rs {orderReceipt.packingCharge.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="border-t-2 border-sky-200 pt-2 mt-2">
+                  <div className="flex justify-between text-black">
+                    <span className="font-bold text-lg">Total:</span>
+                    <span className="font-bold text-xl text-sky-500">Rs {orderReceipt.total.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Info */}
+              <div className="mt-6 p-4 bg-green-50 rounded-lg border-2 border-green-200">
+                <p className="text-sm text-green-800">
+                  <span className="font-semibold">✓ Payment Successful</span>
+                </p>
+                <p className="text-xs text-green-700 mt-1">Payment ID: {orderReceipt.paymentId}</p>
+              </div>
+            </div>
+
+            {/* Receipt Actions */}
+            <div className="border-t-2 border-sky-100 p-6 bg-gray-50 no-print">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    window.print();
+                  }}
+                  className="flex-1 bg-sky-300 text-white py-3 rounded-xl hover:bg-sky-400 transition-colors font-semibold"
+                >
+                  🖨️ Print / Save
+                </button>
+                <button
+                  onClick={async () => {
+                    const receiptElement = document.getElementById('receipt');
+                    if (receiptElement) {
+                      try {
+                        const canvas = await html2canvas(receiptElement, {
+                          backgroundColor: '#ffffff',
+                          scale: 2,
+                        });
+                        const link = document.createElement('a');
+                        link.download = `receipt-order-${orderReceipt.dailyOrderId}.png`;
+                        link.href = canvas.toDataURL('image/png');
+                        link.click();
+                      } catch (error) {
+                        console.error('Error creating screenshot:', error);
+                        alert('Error creating screenshot. Please try the print option.');
+                      }
+                    }
+                  }}
+                  className="flex-1 bg-cyan-300 text-white py-3 rounded-xl hover:bg-cyan-400 transition-colors font-semibold"
+                >
+                  📸 Screenshot
+                </button>
+                <button
+                  onClick={() => setShowReceipt(false)}
+                  className="px-6 py-3 bg-gray-200 text-black rounded-xl hover:bg-gray-300 transition-colors font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

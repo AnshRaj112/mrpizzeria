@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "cloudinary": "^2.8.0",
+    "html2canvas": "^1.4.1",
     "mongodb": "^7.0.0",
     "multer": "^2.0.2",
     "next": "16.1.1",
+    "razorpay": "^2.9.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "sharp": "^0.34.5"
