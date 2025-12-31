@@ -923,7 +923,15 @@ export default function AdminPage() {
                           )}
                           {order.status === 'prepared' && (
                             <>
-                              {(order.orderType === 'dine_in' || order.orderType === 'takeaway') && (
+                              {order.orderType === 'dine-in' && (
+                                <button
+                                  onClick={() => updateOrderStatus(order._id, 'delivered')}
+                                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
+                                >
+                                  Mark as Served
+                                </button>
+                              )}
+                              {order.orderType === 'takeaway' && (
                                 <button
                                   onClick={() => updateOrderStatus(order._id, 'ready_for_pickup')}
                                   className="px-4 py-2 bg-cyan-200 text-cyan-800 rounded-lg hover:bg-cyan-300 transition-colors text-sm font-semibold"

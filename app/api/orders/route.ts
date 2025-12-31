@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { sendOrderPreparedSMS, sendOrderDeliveredSMS } from '@/lib/sms';
 
 // GET - Fetch orders by status
 export async function GET(request: NextRequest) {
@@ -88,6 +89,17 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // Get the order before updating to check current status and get contact info
+    const order = await db.collection('orders').findOne(query);
+
+    if (!order) {
+      return NextResponse.json(
+        { error: 'Order not found' },
+        { status: 404 }
+      );
+    }
+
+    // Update order status
     const result = await db.collection('orders').updateOne(
       query,
       {
@@ -103,6 +115,24 @@ export async function PUT(request: NextRequest) {
         { error: 'Order not found' },
         { status: 404 }
       );
+    }
+
+    // Send SMS notifications based on status change
+    if (order.contactNumber) {
+      try {
+        const orderNumber = order.dailyOrderId?.toString() || order._id.toString();
+        
+        if (status === 'prepared') {
+          // Send SMS when order is prepared
+          await sendOrderPreparedSMS(order.contactNumber, orderNumber);
+        } else if (status === 'delivered') {
+          // Send SMS when order is delivered
+          await sendOrderDeliveredSMS(order.contactNumber, orderNumber);
+        }
+      } catch (smsError) {
+        console.error('Error sending status update SMS:', smsError);
+        // Don't fail the status update if SMS fails
+      }
     }
 
     return NextResponse.json({

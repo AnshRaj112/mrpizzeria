@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import clientPromise from '@/lib/mongodb';
+import { sendOrderConfirmationSMS } from '@/lib/sms';
 
 export async function POST(request: NextRequest) {
   try {
@@ -66,6 +67,60 @@ export async function POST(request: NextRequest) {
           createdAt: new Date(),
           updatedAt: new Date(),
         });
+
+        // Save customer contact number for bulk messaging
+        if (orderData.contactNumber) {
+          try {
+            // Check if contact already exists
+            const existingContact = await db.collection('customers').findOne({
+              contactNumber: orderData.contactNumber,
+            });
+
+            if (!existingContact) {
+              // Save new customer contact
+              await db.collection('customers').insertOne({
+                contactNumber: orderData.contactNumber,
+                customerName: orderData.customerName || '',
+                firstOrderDate: new Date(),
+                lastOrderDate: new Date(),
+                totalOrders: 1,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              });
+            } else {
+              // Update existing customer
+              await db.collection('customers').updateOne(
+                { contactNumber: orderData.contactNumber },
+                {
+                  $set: {
+                    lastOrderDate: new Date(),
+                    updatedAt: new Date(),
+                  },
+                  $inc: { totalOrders: 1 },
+                }
+              );
+            }
+          } catch (contactError) {
+            console.error('Error saving customer contact:', contactError);
+            // Don't fail the order if contact save fails
+          }
+        }
+
+        // Send order confirmation SMS
+        if (orderData.contactNumber) {
+          try {
+            await sendOrderConfirmationSMS(
+              orderData.contactNumber,
+              dailyOrderId.toString(),
+              orderData.items || [],
+              orderData.total || 0,
+              orderData.orderType || 'order'
+            );
+          } catch (smsError) {
+            console.error('Error sending order confirmation SMS:', smsError);
+            // Don't fail the order if SMS fails
+          }
+        }
       } catch (dbError) {
         console.error('Error saving order to database:', dbError);
         // Don't fail the payment verification if DB save fails
