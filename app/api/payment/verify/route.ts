@@ -111,8 +111,12 @@ export async function POST(request: NextRequest) {
           try {
             await sendOrderConfirmationSMS(
               orderData.contactNumber,
+              orderData.customerName || 'Customer',
               dailyOrderId.toString(),
               orderData.items || [],
+              orderData.subtotal || 0,
+              orderData.deliveryCharge || 0,
+              orderData.packingCharge || 0,
               orderData.total || 0,
               orderData.orderType || 'order'
             );

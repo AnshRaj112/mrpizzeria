@@ -34,32 +34,70 @@ export async function sendSMS(to: string, text: string): Promise<{ success: bool
  */
 export function formatOrderItems(items: Array<{ name: string; quantity: number; price: number }>): string {
   return items.map(item => 
-    `• ${item.name} x${item.quantity} - Rs ${(item.price * item.quantity).toFixed(2)}`
+    `${item.name} x${item.quantity} - Rs ${(item.price * item.quantity).toFixed(2)}`
   ).join('\n');
 }
 
 /**
- * Send order confirmation SMS
+ * Get customer title (Mr./Mrs.) - simple heuristic based on name
+ */
+function getCustomerTitle(name: string): string {
+  if (!name) return 'Mr./Mrs.';
+  
+  const trimmedName = name.trim().toLowerCase();
+  // Common female name endings in Indian names
+  const femaleEndings = ['a', 'i', 'ee', 'ya', 'iya'];
+  const lastChar = trimmedName.slice(-1);
+  
+  // Simple heuristic: if name ends with common female endings, use Mrs., otherwise Mr.
+  if (femaleEndings.includes(lastChar) && trimmedName.length > 2) {
+    return 'Mrs.';
+  }
+  return 'Mr.';
+}
+
+/**
+ * Send order confirmation SMS with detailed bill
  */
 export async function sendOrderConfirmationSMS(
   contactNumber: string,
+  customerName: string,
   orderNumber: string,
   items: Array<{ name: string; quantity: number; price: number }>,
+  subtotal: number,
+  deliveryCharge: number,
+  packingCharge: number,
   total: number,
   orderType: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const itemsText = formatOrderItems(items);
-  const text = `🍕 Order Confirmation - Mr. Pizzeria
+  const orderTypeFormatted = orderType.charAt(0).toUpperCase() + orderType.slice(1).replace('-', ' ');
+  
+  let chargesText = '';
+  if (deliveryCharge > 0) {
+    chargesText += `Delivery Charge: Rs ${deliveryCharge.toFixed(2)}\n`;
+  }
+  if (packingCharge > 0) {
+    chargesText += `Packing Charge: Rs ${packingCharge.toFixed(2)}\n`;
+  }
+  
+  const text = `🍕 Mr. Pizzeria - Order Confirmation
 
-Order #${orderNumber}
-Type: ${orderType.charAt(0).toUpperCase() + orderType.slice(1)}
+Dear ${customerName},
+
+Your order #${orderNumber} has been confirmed!
+
+Order Type: ${orderTypeFormatted}
 
 Items:
 ${itemsText}
 
-Total: Rs ${total.toFixed(2)}
+Subtotal: Rs ${subtotal.toFixed(2)}
+${chargesText}Total: Rs ${total.toFixed(2)}
 
-Thank you for your order! We'll notify you when your order is ready.`;
+We'll notify you when your order is ready.
+
+Thank you for choosing Mr. Pizzeria!`;
 
   return await sendSMS(contactNumber, text);
 }
@@ -69,11 +107,22 @@ Thank you for your order! We'll notify you when your order is ready.`;
  */
 export async function sendOrderPreparedSMS(
   contactNumber: string,
-  orderNumber: string
+  customerName: string,
+  orderNumber: string,
+  orderType: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
-  const text = `✅ Your order #${orderNumber} is ready!
+  const title = getCustomerTitle(customerName);
+  
+  let message = '';
+  if (orderType === 'delivery') {
+    message = `${title} ${customerName}, your order #${orderNumber} is out for delivery.`;
+  } else {
+    message = `${title} ${customerName}, your order #${orderNumber} is prepared please take it.`;
+  }
+  
+  const text = `✅ ${message}
 
-Thank you for choosing Mr. Pizzeria. Your order has been prepared and will be delivered/picked up soon.`;
+Thank you for choosing Mr. Pizzeria!`;
 
   return await sendSMS(contactNumber, text);
 }
@@ -83,11 +132,16 @@ Thank you for choosing Mr. Pizzeria. Your order has been prepared and will be de
  */
 export async function sendOrderDeliveredSMS(
   contactNumber: string,
+  customerName: string,
   orderNumber: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
-  const text = `🎉 Your order #${orderNumber} has been delivered!
+  const title = getCustomerTitle(customerName);
+  
+  const text = `🎉 ${title} ${customerName}, your order #${orderNumber} has been completed!
 
-Thank you for choosing Mr. Pizzeria. We hope you enjoyed your meal! Please visit us again.`;
+Thank you for using our service at Mr. Pizzeria. We hope you enjoyed your meal and look forward to serving you again soon!
+
+Your satisfaction is our priority. Have a great day!`;
 
   return await sendSMS(contactNumber, text);
 }
