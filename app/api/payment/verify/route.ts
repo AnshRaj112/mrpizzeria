@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import clientPromise from '@/lib/mongodb';
-import { sendOrderConfirmationSMS } from '@/lib/sms';
 
 export async function POST(request: NextRequest) {
   try {
@@ -106,25 +105,6 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Send order confirmation SMS
-        if (orderData.contactNumber) {
-          try {
-            await sendOrderConfirmationSMS(
-              orderData.contactNumber,
-              orderData.customerName || 'Customer',
-              dailyOrderId.toString(),
-              orderData.items || [],
-              orderData.subtotal || 0,
-              orderData.deliveryCharge || 0,
-              orderData.packingCharge || 0,
-              orderData.total || 0,
-              orderData.orderType || 'order'
-            );
-          } catch (smsError) {
-            console.error('Error sending order confirmation SMS:', smsError);
-            // Don't fail the order if SMS fails
-          }
-        }
       } catch (dbError) {
         console.error('Error saving order to database:', dbError);
         // Don't fail the payment verification if DB save fails

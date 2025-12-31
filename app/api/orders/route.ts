@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
-import { sendOrderPreparedSMS, sendOrderDeliveredSMS } from '@/lib/sms';
 
 // GET - Fetch orders by status
 export async function GET(request: NextRequest) {
@@ -117,25 +116,6 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Send SMS notifications based on status change
-    if (order.contactNumber) {
-      try {
-        const orderNumber = order.dailyOrderId?.toString() || order._id.toString();
-        const customerName = order.customerName || 'Customer';
-        const orderType = order.orderType || 'order';
-        
-        if (status === 'prepared') {
-          // Send SMS when order is prepared
-          await sendOrderPreparedSMS(order.contactNumber, customerName, orderNumber, orderType);
-        } else if (status === 'delivered') {
-          // Send SMS when order is delivered
-          await sendOrderDeliveredSMS(order.contactNumber, customerName, orderNumber);
-        }
-      } catch (smsError) {
-        console.error('Error sending status update SMS:', smsError);
-        // Don't fail the status update if SMS fails
-      }
-    }
 
     return NextResponse.json({
       success: true,

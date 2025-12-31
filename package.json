@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@vonage/server-sdk": "^3.25.1",
     "cloudinary": "^2.8.0",
     "html2canvas": "^1.4.1",
     "mongodb": "^7.0.0",

@@ -70,51 +70,76 @@ export default function Home() {
   // Poll for order status updates
   useEffect(() => {
     if (!lastOrderContact) return;
+    
+    // If order is already delivered, don't poll
+    if (lastOrderStatus === 'delivered') return;
+
+    let intervalId: NodeJS.Timeout;
 
     const checkOrderStatus = async () => {
       try {
         const response = await fetch(`/api/orders/check-status?contact=${encodeURIComponent(lastOrderContact)}`);
         if (response.ok) {
           const data = await response.json();
-          if (data.order && data.order.status !== lastOrderStatus) {
-            const newStatus = data.order.status;
-            setLastOrderStatus(newStatus);
+          if (data.order) {
+            const currentStatus = data.order.status;
+            
+            // If order is delivered, stop polling
+            if (currentStatus === 'delivered') {
+              if (currentStatus !== lastOrderStatus) {
+                setLastOrderStatus(currentStatus);
 
-            // Send notification based on status
-            if ('Notification' in window && Notification.permission === 'granted') {
-              let title = '';
-              let body = '';
-
-              switch (newStatus) {
-                case 'being_prepared':
-                  title = '🍳 Order Being Prepared';
-                  body = `Order #${data.order.dailyOrderId} is now being prepared!`;
-                  break;
-                case 'prepared':
-                  title = '✅ Order Prepared';
-                  body = `Order #${data.order.dailyOrderId} is ready!`;
-                  break;
-                case 'ready_for_pickup':
-                  title = '📦 Ready for Pickup';
-                  body = `Order #${data.order.dailyOrderId} is ready for pickup!`;
-                  break;
-                case 'out_for_delivery':
-                  title = '🚚 Out for Delivery';
-                  body = `Order #${data.order.dailyOrderId} is out for delivery!`;
-                  break;
-                case 'delivered':
-                  title = '🎉 Order Delivered';
-                  body = `Order #${data.order.dailyOrderId} has been delivered! Thank you!`;
-                  break;
-                default:
-                  return;
+                // Send notification
+                if ('Notification' in window && Notification.permission === 'granted') {
+                  new Notification('🎉 Order Delivered', {
+                    body: `Order #${data.order.dailyOrderId} has been delivered! Thank you!`,
+                    icon: '/favicon.ico',
+                    badge: '/favicon.ico',
+                  });
+                }
               }
+              
+              // Stop polling by clearing the interval
+              clearInterval(intervalId);
+              return;
+            }
+            
+            // Only update if status changed
+            if (currentStatus !== lastOrderStatus) {
+              setLastOrderStatus(currentStatus);
 
-              new Notification(title, {
-                body,
-                icon: '/favicon.ico',
-                badge: '/favicon.ico',
-              });
+              // Send notification based on status
+              if ('Notification' in window && Notification.permission === 'granted') {
+                let title = '';
+                let body = '';
+
+                switch (currentStatus) {
+                  case 'being_prepared':
+                    title = '🍳 Order Being Prepared';
+                    body = `Order #${data.order.dailyOrderId} is now being prepared!`;
+                    break;
+                  case 'prepared':
+                    title = '✅ Order Prepared';
+                    body = `Order #${data.order.dailyOrderId} is ready!`;
+                    break;
+                  case 'ready_for_pickup':
+                    title = '📦 Ready for Pickup';
+                    body = `Order #${data.order.dailyOrderId} is ready for pickup!`;
+                    break;
+                  case 'out_for_delivery':
+                    title = '🚚 Out for Delivery';
+                    body = `Order #${data.order.dailyOrderId} is out for delivery!`;
+                    break;
+                  default:
+                    return;
+                }
+
+                new Notification(title, {
+                  body,
+                  icon: '/favicon.ico',
+                  badge: '/favicon.ico',
+                });
+              }
             }
           }
         }
@@ -125,9 +150,11 @@ export default function Home() {
 
     // Check immediately, then every 10 seconds
     checkOrderStatus();
-    const interval = setInterval(checkOrderStatus, 10000);
+    intervalId = setInterval(checkOrderStatus, 10000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(intervalId);
+    };
   }, [lastOrderContact, lastOrderStatus]);
 
   // Fetch charges and items from API
@@ -379,10 +406,11 @@ export default function Home() {
               setShowCart(false);
               setShowReceipt(true);
               
-              // Reset form and cart (but keep contact number for tracking)
+              // Reset form and cart
               setCart([]);
               setOrderType('');
               setCustomerName('');
+              setContactNumber('');
               setDeliveryAddress('');
             } else {
               const error = await verifyResponse.json();
