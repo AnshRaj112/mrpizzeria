@@ -76,7 +76,7 @@ export default function OrderDisplayPage() {
               <h1 className="text-2xl lg:text-4xl font-bold text-black mb-1">
                 Order Status Display
               </h1>
-              <p className="text-gray-600 text-sm lg:text-base">
+              <p className="text-black text-sm lg:text-base">
                 Real-time order tracking system
               </p>
             </div>
@@ -89,7 +89,7 @@ export default function OrderDisplayPage() {
                   hour12: true 
                 })}
               </div>
-              <div className="text-gray-600 text-xs lg:text-sm">
+              <div className="text-black text-xs lg:text-sm">
                 {currentTime.toLocaleDateString('en-US', { 
                   weekday: 'long', 
                   month: 'short', 
@@ -109,7 +109,7 @@ export default function OrderDisplayPage() {
                 <h2 className="text-xl lg:text-3xl font-bold text-black mb-1">
                   Now Preparing
                 </h2>
-                <p className="text-gray-600 text-xs lg:text-sm">
+                <p className="text-black text-xs lg:text-sm">
                   Orders in kitchen
                 </p>
               </div>
@@ -128,10 +128,10 @@ export default function OrderDisplayPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  <p className="text-gray-500 text-base lg:text-lg font-semibold">
+                  <p className="text-black text-base lg:text-lg font-semibold">
                     No orders being prepared
                   </p>
-                  <p className="text-gray-400 text-xs lg:text-sm mt-1">
+                  <p className="text-black text-xs lg:text-sm mt-1">
                     Waiting for new orders...
                   </p>
                 </div>
@@ -167,7 +167,7 @@ export default function OrderDisplayPage() {
                 <h2 className="text-xl lg:text-3xl font-bold text-black mb-1">
                   Ready for Pickup
                 </h2>
-                <p className="text-gray-600 text-xs lg:text-sm">
+                <p className="text-black text-xs lg:text-sm">
                   Orders ready now
                 </p>
               </div>
@@ -186,10 +186,10 @@ export default function OrderDisplayPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
-                  <p className="text-gray-500 text-base lg:text-lg font-semibold">
+                  <p className="text-black text-base lg:text-lg font-semibold">
                     No orders ready yet
                   </p>
-                  <p className="text-gray-400 text-xs lg:text-sm mt-1">
+                  <p className="text-black text-xs lg:text-sm mt-1">
                     Orders will appear here when ready
                   </p>
                 </div>

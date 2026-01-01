@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { notifyOrderUpdate } from '@/lib/notifications';
 
 // GET - Fetch orders by status
 export async function GET(request: NextRequest) {
@@ -116,6 +117,46 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // Broadcast notification to subscribers
+    try {
+      // Get updated order with all details
+      const updatedOrder = await db.collection('orders').findOne(query);
+      
+      if (!updatedOrder) {
+        console.error('Order not found after update');
+        return NextResponse.json({
+          success: true,
+          message: 'Order status updated successfully',
+        });
+      }
+
+      const notificationData = {
+        type: 'status_update',
+        orderId: orderId,
+        dailyOrderId: updatedOrder.dailyOrderId,
+        status: status,
+        orderType: updatedOrder.orderType,
+        customerName: updatedOrder.customerName,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Notify by orderId (MongoDB ObjectId string)
+      console.log(`Sending notification for orderId: ${orderId}`);
+      notifyOrderUpdate(orderId, notificationData);
+
+      // Also notify by contact number (for backwards compatibility)
+      if (updatedOrder.contactNumber) {
+        const contactKey = `contact:${updatedOrder.contactNumber}`;
+        console.log(`Sending notification for contact: ${contactKey}`);
+        notifyOrderUpdate(contactKey, {
+          ...notificationData,
+          contactNumber: updatedOrder.contactNumber,
+        });
+      }
+    } catch (notifyError) {
+      // Don't fail the request if notification fails
+      console.error('Error sending notification:', notifyError);
+    }
 
     return NextResponse.json({
       success: true,

@@ -3,6 +3,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import html2canvas from 'html2canvas';
+import Alert from '@/components/Alert';
+import ConfirmDialog from '@/components/ConfirmDialog';
 
 // Food item types
 type Category = 'retail' | 'produce';
@@ -39,6 +41,11 @@ export default function Home() {
   const [orderReceipt, setOrderReceipt] = useState<any>(null);
   const [lastOrderStatus, setLastOrderStatus] = useState<string | null>(null);
   const [lastOrderContact, setLastOrderContact] = useState<string>('');
+  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
+  const [discounts, setDiscounts] = useState<any[]>([]);
+  const [upcomingDiscounts, setUpcomingDiscounts] = useState<any[]>([]);
+  const [alert, setAlert] = useState<{ message: string; type: 'error' | 'warning' | 'info' | 'success' } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
 
   // Fetch items function (can be called from anywhere)
   const fetchItems = useCallback(async () => {
@@ -67,97 +74,162 @@ export default function Home() {
     }
   }, []);
 
-  // Poll for order status updates
-  useEffect(() => {
-    if (!lastOrderContact) return;
+  // Fetch current order status
+  const fetchOrderStatus = useCallback(async () => {
+    if (!lastOrderId && !lastOrderContact) return;
     
-    // If order is already delivered, don't poll
-    if (lastOrderStatus === 'delivered') return;
-
-    let intervalId: NodeJS.Timeout;
-
-    const checkOrderStatus = async () => {
-      try {
-        const response = await fetch(`/api/orders/check-status?contact=${encodeURIComponent(lastOrderContact)}`);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.order) {
-            const currentStatus = data.order.status;
-            
-            // If order is delivered, stop polling
-            if (currentStatus === 'delivered') {
-              if (currentStatus !== lastOrderStatus) {
-                setLastOrderStatus(currentStatus);
-
-                // Send notification
-                if ('Notification' in window && Notification.permission === 'granted') {
-                  new Notification('🎉 Order Delivered', {
-                    body: `Order #${data.order.dailyOrderId} has been delivered! Thank you!`,
-                    icon: '/favicon.ico',
-                    badge: '/favicon.ico',
-                  });
-                }
-              }
-              
-              // Stop polling by clearing the interval
-              clearInterval(intervalId);
-              return;
+    try {
+      const url = lastOrderId 
+        ? `/api/orders/check-status?orderId=${encodeURIComponent(lastOrderId)}`
+        : `/api/orders/check-status?contact=${encodeURIComponent(lastOrderContact)}`;
+      
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.order && data.order.status) {
+          const currentStatus = data.order.status;
+          console.log(`Fetched current status: ${currentStatus}`);
+          setLastOrderStatus((prevStatus) => {
+            if (prevStatus !== currentStatus) {
+              return currentStatus;
             }
+            return prevStatus;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching order status:', error);
+    }
+  }, [lastOrderId, lastOrderContact]);
+
+  // Real-time order status updates using Server-Sent Events
+  useEffect(() => {
+    if (!lastOrderId && !lastOrderContact) return;
+
+    let eventSource: EventSource | null = null;
+    let pollInterval: NodeJS.Timeout | null = null;
+    let sseWorking = false;
+    
+    // Fetch initial status first
+    fetchOrderStatus();
+
+    try {
+      // Create SSE connection - prefer orderId, fallback to contactNumber
+      const url = lastOrderId 
+        ? `/api/orders/notifications?orderId=${encodeURIComponent(lastOrderId)}`
+        : `/api/orders/notifications?contact=${encodeURIComponent(lastOrderContact)}`;
+      
+      console.log(`Connecting to SSE: ${url}`);
+      eventSource = new EventSource(url);
+
+      eventSource.onopen = () => {
+        console.log('SSE connection opened');
+        sseWorking = true;
+        // Clear polling if SSE is working
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          console.log('SSE message received:', event.data);
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'connected') {
+            console.log('SSE connected:', data.message, 'subscriptionKey:', data.subscriptionKey);
+            return;
+          }
+          
+          if (data.type === 'status_update') {
+            const currentStatus = data.status;
+            console.log(`Status update received: ${currentStatus} for order ${data.dailyOrderId}`);
             
-            // Only update if status changed
-            if (currentStatus !== lastOrderStatus) {
-              setLastOrderStatus(currentStatus);
+            // Always update status when we receive an update
+            setLastOrderStatus(currentStatus);
 
-              // Send notification based on status
-              if ('Notification' in window && Notification.permission === 'granted') {
-                let title = '';
-                let body = '';
+            // Send browser notification
+            if ('Notification' in window && Notification.permission === 'granted') {
+              let title = '';
+              let body = '';
 
-                switch (currentStatus) {
-                  case 'being_prepared':
-                    title = '🍳 Order Being Prepared';
-                    body = `Order #${data.order.dailyOrderId} is now being prepared!`;
-                    break;
-                  case 'prepared':
-                    title = '✅ Order Prepared';
-                    body = `Order #${data.order.dailyOrderId} is ready!`;
-                    break;
-                  case 'ready_for_pickup':
-                    title = '📦 Ready for Pickup';
-                    body = `Order #${data.order.dailyOrderId} is ready for pickup!`;
-                    break;
-                  case 'out_for_delivery':
-                    title = '🚚 Out for Delivery';
-                    body = `Order #${data.order.dailyOrderId} is out for delivery!`;
-                    break;
-                  default:
-                    return;
-                }
-
-                new Notification(title, {
-                  body,
-                  icon: '/favicon.ico',
-                  badge: '/favicon.ico',
-                });
+              switch (currentStatus) {
+                case 'being_prepared':
+                  title = '🍳 Order Being Prepared';
+                  body = `Order #${data.dailyOrderId} is now being prepared!`;
+                  break;
+                case 'prepared':
+                  title = '✅ Order Prepared';
+                  body = `Order #${data.dailyOrderId} is ready!`;
+                  break;
+                case 'ready_for_pickup':
+                  title = '📦 Ready for Pickup';
+                  body = `Order #${data.dailyOrderId} is ready for pickup!`;
+                  break;
+                case 'out_for_delivery':
+                  title = '🚚 Out for Delivery';
+                  body = `Order #${data.dailyOrderId} is out for delivery!`;
+                  break;
+                case 'delivered':
+                  title = '🎉 Order Delivered';
+                  body = `Order #${data.dailyOrderId} has been delivered! Thank you!`;
+                  break;
+                default:
+                  return;
               }
+
+              new Notification(title, {
+                body,
+                icon: '/favicon.ico',
+                badge: '/favicon.ico',
+              });
+            }
+
+            // If delivered, close connection
+            if (currentStatus === 'delivered') {
+              eventSource?.close();
             }
           }
+        } catch (error) {
+          console.error('Error parsing SSE message:', error);
         }
-      } catch (error) {
-        console.error('Error checking order status:', error);
-      }
-    };
+      };
 
-    // Check immediately, then every 10 seconds
-    checkOrderStatus();
-    intervalId = setInterval(checkOrderStatus, 10000);
+      eventSource.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        console.error('EventSource readyState:', eventSource?.readyState);
+        
+        // If SSE fails, fallback to polling
+        if (!sseWorking && !pollInterval) {
+          console.log('SSE not working, falling back to polling');
+          pollInterval = setInterval(() => {
+            fetchOrderStatus();
+          }, 5000); // Poll every 5 seconds
+        }
+      };
+
+    } catch (error) {
+      console.error('Error creating SSE connection:', error);
+      // Fallback to polling if SSE fails to initialize
+      if (!pollInterval) {
+        pollInterval = setInterval(() => {
+          fetchOrderStatus();
+        }, 5000);
+      }
+    }
 
     return () => {
-      clearInterval(intervalId);
+      if (eventSource) {
+        eventSource.close();
+      }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
     };
-  }, [lastOrderContact, lastOrderStatus]);
+  }, [lastOrderId, lastOrderContact]);
 
-  // Fetch charges and items from API
+  // Fetch charges, items, and discounts from API
   useEffect(() => {
     const fetchCharges = async () => {
       try {
@@ -173,17 +245,47 @@ export default function Home() {
       }
     };
 
+    const fetchDiscounts = async () => {
+      try {
+        // Fetch active discounts
+        const activeResponse = await fetch('/api/discounts?activeOnly=true');
+        if (activeResponse.ok) {
+          const activeData = await activeResponse.json();
+          setDiscounts(activeData || []);
+        }
+        
+        // Fetch upcoming discounts
+        const upcomingResponse = await fetch('/api/discounts?includeUpcoming=true');
+        if (upcomingResponse.ok) {
+          const allData = await upcomingResponse.json();
+          const now = new Date();
+          // Filter for upcoming discounts (startDate > now)
+          const upcoming = allData.filter((discount: any) => {
+            if (!discount.isActive) return false;
+            const startDate = new Date(discount.startDate);
+            return startDate > now;
+          });
+          setUpcomingDiscounts(upcoming || []);
+        }
+      } catch (error) {
+        console.error('Error fetching discounts:', error);
+      }
+    };
+
     fetchCharges();
+    fetchDiscounts();
     fetchItems();
     
-    // Refresh items every 30 seconds to get new items
+    // Refresh items and discounts every 30 seconds to get new items
     const itemsInterval = setInterval(() => {
       fetchItems();
+      fetchDiscounts();
     }, 30000);
     
     // Refresh items when window regains focus (user comes back to tab)
     const handleFocus = () => {
       fetchItems();
+      fetchDiscounts();
     };
     window.addEventListener('focus', handleFocus);
     
@@ -250,10 +352,68 @@ export default function Home() {
     );
   };
 
-  // Calculate subtotal
+  // Get discounted price and discount info for an item
+  const getDiscountedPrice = useCallback((item: FoodItem): { price: number; discountPercent: number; hasDiscount: boolean } => {
+    const now = new Date();
+    let finalPrice = item.price;
+    let discountPercent = 0;
+    let hasDiscount = false;
+
+    // Find applicable discounts
+    const applicableDiscounts = discounts.filter((discount) => {
+      if (!discount.isActive) return false;
+      const startDate = new Date(discount.startDate);
+      const endDate = discount.endDate ? new Date(discount.endDate) : null;
+      if (startDate > now || (endDate && endDate < now)) return false;
+      
+      if (discount.applyTo === 'all') return true;
+      if (discount.applyTo === 'specific' && discount.productIds?.includes(item.id)) return true;
+      return false;
+    });
+
+    // Apply the best discount (highest value)
+    if (applicableDiscounts.length > 0) {
+      let bestDiscount = applicableDiscounts[0];
+      let bestDiscountValue = 0;
+
+      applicableDiscounts.forEach((discount) => {
+        let discountValue = 0;
+        if (discount.discountType === 'percentage') {
+          discountValue = (item.price * discount.discountValue) / 100;
+        } else {
+          discountValue = discount.discountValue;
+        }
+        if (discountValue > bestDiscountValue) {
+          bestDiscountValue = discountValue;
+          bestDiscount = discount;
+        }
+      });
+
+      if (bestDiscount.discountType === 'percentage') {
+        finalPrice = item.price - (item.price * bestDiscount.discountValue) / 100;
+        discountPercent = bestDiscount.discountValue;
+      } else {
+        finalPrice = Math.max(0, item.price - bestDiscount.discountValue);
+        // Calculate percentage for fixed discounts
+        discountPercent = Math.round((bestDiscount.discountValue / item.price) * 100);
+      }
+      hasDiscount = finalPrice < item.price;
+    }
+
+    return {
+      price: Math.max(0, parseFloat(finalPrice.toFixed(2))),
+      discountPercent: Math.round(discountPercent),
+      hasDiscount,
+    };
+  }, [discounts]);
+
+  // Calculate subtotal with discounts
   const cartSubtotal = useMemo(() => {
-    return cart.reduce((total, item) => total + item.price * item.quantity, 0);
-  }, [cart]);
+    return cart.reduce((total, item) => {
+      const discountInfo = getDiscountedPrice(item);
+      return total + discountInfo.price * item.quantity;
+    }, 0);
+  }, [cart, getDiscountedPrice]);
 
   // Calculate total with charges
   const cartTotal = useMemo(() => {
@@ -270,23 +430,33 @@ export default function Home() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
+  // Show alert helper
+  const showAlert = (message: string, type: 'error' | 'warning' | 'info' | 'success' = 'error') => {
+    setAlert({ message, type });
+  };
+
+  // Show confirm dialog helper
+  const showConfirm = (message: string, onConfirm: () => void, type: 'danger' | 'warning' | 'info' = 'info') => {
+    setConfirmDialog({ message, onConfirm, type });
+  };
+
   // Handle Razorpay payment
   const handlePayment = async () => {
     // Validate all required fields
     if (!orderType) {
-      alert('Please select an order type');
+      showAlert('Please select an order type', 'warning');
       return;
     }
     if (!customerName.trim()) {
-      alert('Please enter your name');
+      showAlert('Please enter your name', 'warning');
       return;
     }
     if (!contactNumber.trim()) {
-      alert('Please enter your contact number');
+      showAlert('Please enter your contact number', 'warning');
       return;
     }
     if (orderType === 'delivery' && !deliveryAddress.trim()) {
-      alert('Please enter your delivery address');
+      showAlert('Please enter your delivery address', 'warning');
       return;
     }
 
@@ -306,7 +476,7 @@ export default function Home() {
 
       if (!response.ok) {
         const error = await response.json();
-        alert(error.error || 'Failed to create payment order');
+        showAlert(error.error || 'Failed to create payment order', 'error');
         return;
       }
 
@@ -315,13 +485,13 @@ export default function Home() {
       // Get Razorpay key from API
       const keyResponse = await fetch('/api/payment/get-key');
       if (!keyResponse.ok) {
-        alert('Payment gateway configuration error. Please contact support.');
+        showAlert('Payment gateway configuration error. Please contact support.', 'error');
         return;
       }
       const { key } = await keyResponse.json();
 
       if (!key) {
-        alert('Payment gateway configuration error. Please contact support.');
+        showAlert('Payment gateway configuration error. Please contact support.', 'error');
         return;
       }
 
@@ -401,6 +571,7 @@ export default function Home() {
               // Track order for status updates
               setLastOrderStatus('pending');
               setLastOrderContact(contactNumber);
+              setLastOrderId(result.orderId || null);
 
               // Close cart and show receipt
               setShowCart(false);
@@ -414,11 +585,11 @@ export default function Home() {
               setDeliveryAddress('');
             } else {
               const error = await verifyResponse.json();
-              alert('Payment verification failed: ' + (error.error || 'Unknown error'));
+              showAlert('Payment verification failed: ' + (error.error || 'Unknown error'), 'error');
             }
           } catch (error) {
             console.error('Error verifying payment:', error);
-            alert('Error verifying payment. Please contact support.');
+            showAlert('Error verifying payment. Please contact support.', 'error');
           }
         },
         prefill: {
@@ -440,15 +611,15 @@ export default function Home() {
       if (typeof window !== 'undefined' && window.Razorpay) {
         const razorpay = new window.Razorpay(options);
         razorpay.on('payment.failed', function (response: { error: { description?: string } }) {
-          alert(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+          showAlert(`Payment failed: ${response.error?.description || 'Unknown error'}`, 'error');
         });
         razorpay.open();
       } else {
-        alert('Payment gateway is loading. Please try again in a moment.');
+        showAlert('Payment gateway is loading. Please try again in a moment.', 'warning');
       }
     } catch (error) {
       console.error('Error initiating payment:', error);
-      alert('Error initiating payment. Please try again.');
+      showAlert('Error initiating payment. Please try again.', 'error');
     }
   };
 
@@ -537,6 +708,52 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* Upcoming Discounts Banner */}
+      {upcomingDiscounts.length > 0 && (
+        <div className="bg-gradient-to-r from-orange-400 via-red-400 to-pink-400 text-white py-4 shadow-lg">
+          <div className="container mx-auto px-4">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <svg className="w-6 h-6 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.214.33-.403.713-.57 1.116-.334.804-.614 1.768-.84 2.734a31.365 31.365 0 00-.613 3.58 2.64 2.64 0 01-.945-1.067c-.328-.68-.398-1.534-.398-2.654A1 1 0 005.05 6.05 6.981 6.981 0 003 11a7 7 0 1011.95-4.95c-.592-.591-.98-.985-1.348-1.467-.363-.476-.724-1.063-1.207-2.03zM12.12 15.88A3 3 0 017 13s.879.5 2.5.5c0-1 .5-4 1.25-4.5.5 1 .786 1.293 1.371 1.879A2.99 2.99 0 0113 13a2.99 2.99 0 01-.879 2.121z" clipRule="evenodd" />
+              </svg>
+              <h2 className="text-xl font-bold">Upcoming Discounts</h2>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-4">
+              {upcomingDiscounts.map((discount) => {
+                const startDate = new Date(discount.startDate);
+                const daysUntil = Math.ceil((startDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                const discountText = discount.discountType === 'percentage' 
+                  ? `${discount.discountValue}% OFF`
+                  : `Rs ${discount.discountValue} OFF`;
+                
+                return (
+                  <div
+                    key={discount._id}
+                    className="bg-white/20 backdrop-blur-sm rounded-lg px-4 py-2 border-2 border-white/30"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold">{discountText}</div>
+                        <div className="text-sm opacity-90">{discount.name}</div>
+                      </div>
+                      <div className="border-l-2 border-white/30 pl-3">
+                        <div className="text-xs opacity-75">Starts in</div>
+                        <div className="text-lg font-bold">
+                          {daysUntil === 0 ? 'Today!' : daysUntil === 1 ? 'Tomorrow' : `${daysUntil} days`}
+                        </div>
+                        <div className="text-xs opacity-75">
+                          {startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="container mx-auto px-4 py-8">
         {/* Search Bar */}
@@ -655,10 +872,39 @@ export default function Home() {
                             />
                           </div>
                           <div className="p-4">
-                            <h3 className="text-lg font-semibold text-black mb-2">{item.name}</h3>
+                            <div className="flex items-start justify-between mb-2">
+                              <h3 className="text-lg font-semibold text-black flex-1">{item.name}</h3>
+                              {(() => {
+                                const discountInfo = getDiscountedPrice(item);
+                                if (discountInfo.hasDiscount) {
+                                  return (
+                                    <span className="ml-2 px-2 py-1 bg-red-500 text-white text-xs font-bold rounded-full whitespace-nowrap">
+                                      -{discountInfo.discountPercent}%
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
+                            </div>
                             <div className="flex items-center justify-between mb-3">
                               <span className="text-sm text-black capitalize">{item.subCategory}</span>
-                              <span className="text-xl font-bold text-sky-500">Rs {item.price.toFixed(2)}</span>
+                              <div className="flex flex-col items-end">
+                                {(() => {
+                                  const discountInfo = getDiscountedPrice(item);
+                                  return (
+                                    <>
+                                      {discountInfo.hasDiscount ? (
+                                        <>
+                                          <span className="text-sm text-gray-400 line-through">Rs {item.price.toFixed(2)}</span>
+                                          <span className="text-xl font-bold text-green-600">Rs {discountInfo.price.toFixed(2)}</span>
+                                        </>
+                                      ) : (
+                                        <span className="text-xl font-bold text-sky-500">Rs {item.price.toFixed(2)}</span>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </div>
                             </div>
                             {(() => {
                               const cartItem = cart.find(cartItem => cartItem.id === item.id);
@@ -746,11 +992,38 @@ export default function Home() {
                           />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-base text-black mb-1 truncate">{item.name}</h3>
-                          <p className="text-xs text-gray-600">Rs {item.price.toFixed(2)} each</p>
-                          <p className="text-sm font-semibold text-sky-500 mt-1">
-                            Rs {(item.price * item.quantity).toFixed(2)}
-                          </p>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-bold text-base text-black truncate">{item.name}</h3>
+                            {(() => {
+                              const discountInfo = getDiscountedPrice(item);
+                              if (discountInfo.hasDiscount) {
+                                return (
+                                  <span className="px-1.5 py-0.5 bg-red-500 text-white text-xs font-bold rounded whitespace-nowrap">
+                                    -{discountInfo.discountPercent}%
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                          {(() => {
+                            const discountInfo = getDiscountedPrice(item);
+                            return (
+                              <>
+                                {discountInfo.hasDiscount ? (
+                                  <>
+                                    <p className="text-xs text-gray-400 line-through">Rs {item.price.toFixed(2)} each</p>
+                                    <p className="text-xs text-green-600 font-semibold">Rs {discountInfo.price.toFixed(2)} each</p>
+                                  </>
+                                ) : (
+                                  <p className="text-xs text-gray-600">Rs {item.price.toFixed(2)} each</p>
+                                )}
+                                <p className="text-sm font-semibold text-sky-500 mt-1">
+                                  Rs {(discountInfo.price * item.quantity).toFixed(2)}
+                                </p>
+                              </>
+                            );
+                          })()}
                         </div>
                         <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-2 py-1">
                           <button
@@ -967,6 +1240,39 @@ export default function Home() {
                   </span>
                 </div>
               </div>
+              {/* Order Status Indicator */}
+              {lastOrderStatus && (
+                <div className="mt-4 p-3 bg-white rounded-lg border-2 border-sky-200">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${
+                      lastOrderStatus === 'pending' ? 'bg-yellow-400 animate-pulse' :
+                      lastOrderStatus === 'being_prepared' ? 'bg-blue-400 animate-pulse' :
+                      lastOrderStatus === 'prepared' ? 'bg-green-400' :
+                      lastOrderStatus === 'ready_for_pickup' ? 'bg-cyan-400' :
+                      lastOrderStatus === 'out_for_delivery' ? 'bg-purple-400 animate-pulse' :
+                      lastOrderStatus === 'delivered' ? 'bg-green-500' :
+                      'bg-gray-400'
+                    }`}></div>
+                    <div className="flex-1">
+                      <p className="text-xs text-gray-600">Order Status</p>
+                      <p className="font-bold text-black">
+                        {lastOrderStatus === 'pending' ? '⏳ Pending' :
+                         lastOrderStatus === 'being_prepared' ? '🍳 Being Prepared' :
+                         lastOrderStatus === 'prepared' ? '✅ Prepared' :
+                         lastOrderStatus === 'ready_for_pickup' ? '📦 Ready for Pickup' :
+                         lastOrderStatus === 'out_for_delivery' ? '🚚 Out for Delivery' :
+                         lastOrderStatus === 'delivered' ? '🎉 Delivered' :
+                         lastOrderStatus}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {lastOrderStatus === 'delivered' 
+                      ? 'Your order has been delivered. Thank you!' 
+                      : 'You will receive notifications when your order status updates.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Receipt Content */}
@@ -974,7 +1280,7 @@ export default function Home() {
               {/* Customer Info */}
               <div className="mb-6">
                 <h3 className="font-bold text-black mb-2">Customer Details</h3>
-                <div className="bg-gray-50 rounded-lg p-4 space-y-1 text-sm">
+                <div className="bg-grey-50 rounded-lg p-4 space-y-1 text-black">
                   <p><span className="font-semibold">Name:</span> {orderReceipt.customerName}</p>
                   <p><span className="font-semibold">Contact:</span> {orderReceipt.contactNumber}</p>
                   <p><span className="font-semibold">Order Type:</span> <span className="capitalize">{orderReceipt.orderType}</span></p>
@@ -1031,7 +1337,6 @@ export default function Home() {
                 <p className="text-sm text-green-800">
                   <span className="font-semibold">✓ Payment Successful</span>
                 </p>
-                <p className="text-xs text-green-700 mt-1">Payment ID: {orderReceipt.paymentId}</p>
               </div>
             </div>
 
@@ -1061,7 +1366,7 @@ export default function Home() {
                         link.click();
                       } catch (error) {
                         console.error('Error creating screenshot:', error);
-                        alert('Error creating screenshot. Please try the print option.');
+                        showAlert('Error creating screenshot. Please try the print option.', 'error');
                       }
                     }
                   }}
@@ -1079,6 +1384,31 @@ export default function Home() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Custom Alert */}
+      {alert && (
+        <Alert
+          message={alert.message}
+          type={alert.type}
+          onClose={() => setAlert(null)}
+        />
+      )}
+
+      {/* Custom Confirm Dialog */}
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          title="Confirm Action"
+          confirmText="Confirm"
+          cancelText="Cancel"
+          type={confirmDialog.type}
+          onConfirm={() => {
+            confirmDialog.onConfirm();
+            setConfirmDialog(null);
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
       )}
     </div>
   );

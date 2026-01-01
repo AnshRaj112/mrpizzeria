@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
     // Get daily order ID
     let dailyOrderId = 1;
     let orderDate = new Date().toISOString().split('T')[0];
+    let orderId: string | null = null;
     
     if (orderData) {
       try {
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
         dailyOrderId = lastOrder ? (lastOrder.dailyOrderId || 0) + 1 : 1;
         
         // Save order to database with daily order ID
-        await db.collection('orders').insertOne({
+        const insertResult = await db.collection('orders').insertOne({
           ...orderData,
           dailyOrderId,
           orderDate,
@@ -66,6 +67,8 @@ export async function POST(request: NextRequest) {
           createdAt: new Date(),
           updatedAt: new Date(),
         });
+
+        orderId = insertResult.insertedId.toString();
 
         // Save customer contact number for bulk messaging
         if (orderData.contactNumber) {
@@ -116,6 +119,7 @@ export async function POST(request: NextRequest) {
       message: 'Payment verified successfully',
       dailyOrderId,
       orderDate,
+      orderId: orderId,
       razorpayOrderId: razorpay_order_id,
       paymentId: razorpay_payment_id,
     });

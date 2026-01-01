@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 
-// GET - Check order status by contact number
+import { ObjectId } from 'mongodb';
+
+// GET - Check order status by orderId or contact number
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const orderId = searchParams.get('orderId');
     const contactNumber = searchParams.get('contact');
 
-    if (!contactNumber) {
+    if (!orderId && !contactNumber) {
       return NextResponse.json(
-        { error: 'Contact number is required' },
+        { error: 'Order ID or contact number is required' },
         { status: 400 }
       );
     }
@@ -17,13 +20,29 @@ export async function GET(request: NextRequest) {
     const client = await clientPromise;
     const db = client.db('mrpizzeria');
 
-    // Get the most recent order for this contact number
-    const order = await db
-      .collection('orders')
-      .findOne(
-        { contactNumber },
-        { sort: { createdAt: -1 } }
-      );
+    let order;
+    
+    if (orderId) {
+      // Get order by orderId
+      try {
+        order = await db
+          .collection('orders')
+          .findOne({ _id: new ObjectId(orderId) });
+      } catch (error) {
+        return NextResponse.json(
+          { error: 'Invalid order ID format' },
+          { status: 400 }
+        );
+      }
+    } else {
+      // Get the most recent order for this contact number
+      order = await db
+        .collection('orders')
+        .findOne(
+          { contactNumber },
+          { sort: { createdAt: -1 } }
+        );
+    }
 
     if (!order) {
       return NextResponse.json({ order: null });

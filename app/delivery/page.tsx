@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import ConfirmDialog from '@/components/ConfirmDialog';
 
 export default function DeliveryPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
 
   useEffect(() => {
     fetchOrders();
@@ -146,9 +148,13 @@ export default function DeliveryPage() {
 
                     <button
                       onClick={() => {
-                        if (confirm(`Mark Order #${order.dailyOrderId} as delivered?`)) {
-                          markAsDelivered(order._id);
-                        }
+                        setConfirmDialog({
+                          message: `Mark Order #${order.dailyOrderId} as delivered?`,
+                          type: 'info',
+                          onConfirm: () => {
+                            markAsDelivered(order._id);
+                          },
+                        });
                       }}
                       className="w-full px-6 py-3 bg-green-500 text-white rounded-xl hover:bg-green-600 transition-colors font-semibold text-lg shadow-md"
                     >
@@ -171,6 +177,22 @@ export default function DeliveryPage() {
           </div>
         </div>
       </div>
+
+      {/* Custom Confirm Dialog */}
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          title="Confirm Action"
+          confirmText="Confirm"
+          cancelText="Cancel"
+          type={confirmDialog.type}
+          onConfirm={() => {
+            confirmDialog.onConfirm();
+            setConfirmDialog(null);
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   );
 }
