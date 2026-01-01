@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
       discountType,
       discountValue: parseFloat(discountValue.toFixed(2)),
       applyTo,
-      productIds: applyTo === 'specific' ? productIds.map((id: number) => parseInt(id)) : [],
+      productIds: applyTo === 'specific' ? productIds.map((id: number | string) => Math.floor(Number(id))) : [],
       startDate: startDate ? new Date(startDate) : new Date(),
       endDate: endDate ? new Date(endDate) : null,
       isActive: isActive !== undefined ? isActive : true,
@@ -236,7 +236,7 @@ export async function PUT(request: NextRequest) {
             { status: 400 }
           );
         }
-        updateData.productIds = productIds.map((id: number) => parseInt(id));
+        updateData.productIds = productIds.map((id: number | string) => Math.floor(Number(id)));
       } else {
         updateData.productIds = [];
       }
