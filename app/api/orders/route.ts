@@ -99,12 +99,19 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // For takeaway orders, if status is "prepared", automatically set to "ready_for_pickup"
+    let finalStatus = status;
+    if (order.orderType === 'takeaway' && status === 'prepared') {
+      finalStatus = 'ready_for_pickup';
+      console.log(`Takeaway order ${orderId} marked as prepared, automatically setting to ready_for_pickup`);
+    }
+
     // Update order status
     const result = await db.collection('orders').updateOne(
       query,
       {
         $set: {
-          status,
+          status: finalStatus,
           updatedAt: new Date(),
         },
       }
@@ -134,7 +141,7 @@ export async function PUT(request: NextRequest) {
         type: 'status_update',
         orderId: orderId,
         dailyOrderId: updatedOrder.dailyOrderId,
-        status: status,
+        status: finalStatus, // Use finalStatus instead of status
         orderType: updatedOrder.orderType,
         customerName: updatedOrder.customerName,
         updatedAt: new Date().toISOString(),

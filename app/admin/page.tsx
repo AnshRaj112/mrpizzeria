@@ -163,9 +163,18 @@ export default function AdminPage() {
     }
   }, [activeTab]);
 
+  // Clear notification when navigating to orders tab
+  useEffect(() => {
+    if (activeTab === 'orders' && newOrderNotification) {
+      setNewOrderNotification(null);
+    }
+  }, [activeTab]);
+
   // Auto-refresh orders every 5 seconds
   useEffect(() => {
     if (activeTab === 'orders') {
+      // Fetch orders immediately
+      fetchOrders();
       const interval = setInterval(() => {
         fetchOrders();
       }, 5000);
@@ -198,24 +207,18 @@ export default function AdminPage() {
 
             if (data.type === 'new_order') {
               console.log('New order notification:', data);
-              // Show notification
-              setNewOrderNotification({
-                dailyOrderId: data.dailyOrderId,
-                customerName: data.customerName,
-                orderType: data.orderType,
-                total: data.total,
-              });
-
-              // Auto-navigate to orders tab
-              setActiveTab('orders');
-              
-              // Refresh orders list
-              fetchOrders();
-
-              // Auto-hide notification after 5 seconds
-              setTimeout(() => {
-                setNewOrderNotification(null);
-              }, 5000);
+              // If already on orders tab, refresh orders but don't show notification
+              if (activeTab === 'orders') {
+                fetchOrders();
+              } else {
+                // Show notification (don't auto-navigate)
+                setNewOrderNotification({
+                  dailyOrderId: data.dailyOrderId,
+                  customerName: data.customerName,
+                  orderType: data.orderType,
+                  total: data.total,
+                });
+              }
             }
           } catch (error) {
             console.error('Error parsing admin notification:', error);
@@ -244,7 +247,7 @@ export default function AdminPage() {
         eventSource.close();
       }
     };
-  }, [fetchOrders]);
+  }, [fetchOrders, activeTab]);
 
   // Fetch past orders when date changes
   useEffect(() => {
@@ -1265,22 +1268,34 @@ export default function AdminPage() {
 
           {/* New Order Notification Banner */}
           {newOrderNotification && (
-            <div className="mb-6 p-4 rounded-lg bg-gradient-to-r from-green-400 to-emerald-500 text-white border-2 border-green-600 shadow-lg animate-pulse">
+            <div 
+              className="mb-6 p-4 rounded-lg bg-gradient-to-r from-green-400 to-emerald-500 text-white border-2 border-green-600 shadow-lg animate-pulse cursor-pointer hover:from-green-500 hover:to-emerald-600 transition-all"
+              onClick={() => {
+                setActiveTab('orders');
+                fetchOrders();
+              }}
+            >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1">
                   <div className="text-3xl">🔔</div>
-                  <div>
+                  <div className="flex-1">
                     <div className="font-bold text-lg">
                       New Order #{newOrderNotification.dailyOrderId} Received!
                     </div>
                     <div className="text-sm opacity-90">
                       {newOrderNotification.customerName} • {newOrderNotification.orderType} • Rs {newOrderNotification.total.toFixed(2)}
                     </div>
+                    <div className="text-xs opacity-75 mt-1">
+                      Click to view order
+                    </div>
                   </div>
                 </div>
                 <button
-                  onClick={() => setNewOrderNotification(null)}
-                  className="text-white hover:text-gray-200 font-bold text-xl"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setNewOrderNotification(null);
+                  }}
+                  className="text-white hover:text-gray-200 font-bold text-xl ml-4"
                   title="Dismiss"
                 >
                   ×
@@ -1893,7 +1908,7 @@ export default function AdminPage() {
                               onClick={() => updateOrderStatus(order._id, 'prepared')}
                               className="px-4 py-2 bg-green-200 text-green-800 rounded-lg hover:bg-green-300 transition-colors text-sm font-semibold"
                             >
-                              Mark as Prepared
+                              {order.orderType === 'takeaway' ? 'Mark as Ready for Pickup' : 'Mark as Prepared'}
                             </button>
                           )}
                           {order.status === 'prepared' && (
