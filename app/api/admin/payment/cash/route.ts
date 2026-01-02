@@ -11,6 +11,8 @@ export async function POST(request: NextRequest) {
       contactNumber,
       orderType,
       deliveryAddress,
+      discountType,
+      discountValue,
     } = body;
 
     if (!customerName || !contactNumber) {
@@ -82,6 +84,20 @@ export async function POST(request: NextRequest) {
     }
     // Dine-in has no additional charges
 
+    // Apply discount if provided
+    let discountAmount = 0;
+    if (discountType && discountValue) {
+      const discountVal = parseFloat(discountValue);
+      if (!isNaN(discountVal) && discountVal > 0) {
+        if (discountType === 'percentage') {
+          discountAmount = (total * discountVal) / 100;
+        } else if (discountType === 'fixed') {
+          discountAmount = discountVal;
+        }
+        total = Math.max(0, total - discountAmount);
+      }
+    }
+
     // Create order
     const orderData = {
       items: cart.items,
@@ -92,6 +108,9 @@ export async function POST(request: NextRequest) {
       subtotal: subtotal,
       deliveryCharge: finalDeliveryCharge,
       packingCharge: finalPackingCharge,
+      discountType: discountType || null,
+      discountValue: discountValue ? parseFloat(discountValue) : null,
+      discountAmount: discountAmount,
       total: total,
       dailyOrderId,
       orderDate,

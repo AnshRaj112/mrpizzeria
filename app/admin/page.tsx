@@ -54,6 +54,8 @@ export default function AdminPage() {
     contactNumber: '',
     orderType: 'takeaway' as 'takeaway' | 'dine-in' | 'delivery',
     deliveryAddress: '',
+    discountType: '' as 'percentage' | 'fixed' | '',
+    discountValue: '',
   });
   const [newOrderNotification, setNewOrderNotification] = useState<{
     dailyOrderId: number;
@@ -62,7 +64,7 @@ export default function AdminPage() {
     total: number;
   } | null>(null);
 
-  // Calculate cart total based on order type
+  // Calculate cart total based on order type and discount
   const cartTotal = useMemo(() => {
     let total = cartSubtotal;
     if (checkoutForm.orderType === 'delivery') {
@@ -71,8 +73,20 @@ export default function AdminPage() {
       total += packingCharge;
     }
     // Dine-in has no additional charges
+
+    // Apply discount if provided
+    if (checkoutForm.discountType && checkoutForm.discountValue) {
+      const discountValue = parseFloat(checkoutForm.discountValue) || 0;
+      if (checkoutForm.discountType === 'percentage') {
+        const discountAmount = (total * discountValue) / 100;
+        total = Math.max(0, total - discountAmount);
+      } else if (checkoutForm.discountType === 'fixed') {
+        total = Math.max(0, total - discountValue);
+      }
+    }
+
     return total;
-  }, [cartSubtotal, checkoutForm.orderType, deliveryCharge, packingCharge]);
+  }, [cartSubtotal, checkoutForm.orderType, checkoutForm.discountType, checkoutForm.discountValue, deliveryCharge, packingCharge]);
   
   // Item form state
   const [editingItem, setEditingItem] = useState<FoodItem | null>(null);
@@ -599,6 +613,8 @@ export default function AdminPage() {
             contactNumber: '',
             orderType: 'takeaway',
             deliveryAddress: '',
+            discountType: '',
+            discountValue: '',
           });
           fetchCart();
           fetchOrders();
@@ -678,6 +694,8 @@ export default function AdminPage() {
                   contactNumber: '',
                   orderType: 'takeaway',
                   deliveryAddress: '',
+                  discountType: '',
+                  discountValue: '',
                 });
                 fetchCart();
                 fetchOrders();
@@ -2682,6 +2700,22 @@ export default function AdminPage() {
                             <span className="font-semibold">Rs {packingCharge.toFixed(2)}</span>
                           </div>
                         )}
+                        {/* Discount */}
+                        {checkoutForm.discountType && checkoutForm.discountValue && (() => {
+                          const subtotalBeforeDiscount = cartSubtotal + 
+                            (checkoutForm.orderType === 'delivery' ? deliveryCharge + packingCharge : 
+                             checkoutForm.orderType === 'takeaway' ? packingCharge : 0);
+                          const discountValue = parseFloat(checkoutForm.discountValue) || 0;
+                          const discountAmount = checkoutForm.discountType === 'percentage' 
+                            ? (subtotalBeforeDiscount * discountValue) / 100
+                            : discountValue;
+                          return discountAmount > 0 ? (
+                            <div className="flex justify-between text-sm text-green-600">
+                              <span>Discount ({checkoutForm.discountType === 'percentage' ? `${discountValue}%` : `Rs ${discountValue.toFixed(2)}`}):</span>
+                              <span className="font-semibold">- Rs {discountAmount.toFixed(2)}</span>
+                            </div>
+                          ) : null;
+                        })()}
                       </div>
                       <div className="border-t-2 border-gray-300 pt-2 mb-4">
                         <div className="flex justify-between items-center">
@@ -2796,6 +2830,73 @@ export default function AdminPage() {
                           />
                         </div>
                       )}
+
+                      {/* Discount */}
+                      <div>
+                        <label className="block text-xs font-semibold text-black mb-1">
+                          Discount (Optional)
+                        </label>
+                        <div className="grid grid-cols-2 gap-2 mb-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (checkoutForm.discountType === 'percentage') {
+                                setCheckoutForm({ ...checkoutForm, discountType: '', discountValue: '' });
+                              } else {
+                                setCheckoutForm({ ...checkoutForm, discountType: 'percentage', discountValue: '' });
+                              }
+                            }}
+                            className={`px-2 py-1.5 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              checkoutForm.discountType === 'percentage'
+                                ? 'border-purple-400 bg-purple-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-purple-300'
+                            }`}
+                          >
+                            %
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (checkoutForm.discountType === 'fixed') {
+                                setCheckoutForm({ ...checkoutForm, discountType: '', discountValue: '' });
+                              } else {
+                                setCheckoutForm({ ...checkoutForm, discountType: 'fixed', discountValue: '' });
+                              }
+                            }}
+                            className={`px-2 py-1.5 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              checkoutForm.discountType === 'fixed'
+                                ? 'border-purple-400 bg-purple-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-purple-300'
+                            }`}
+                          >
+                            Rs
+                          </button>
+                        </div>
+                        {checkoutForm.discountType && (
+                          <div className="flex gap-2">
+                            <input
+                              type="number"
+                              step={checkoutForm.discountType === 'percentage' ? '0.01' : '0.01'}
+                              min="0"
+                              max={checkoutForm.discountType === 'percentage' ? '100' : undefined}
+                              value={checkoutForm.discountValue}
+                              onChange={(e) =>
+                                setCheckoutForm({ ...checkoutForm, discountValue: e.target.value })
+                              }
+                              className="flex-1 px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-purple-400 focus:outline-none bg-white text-black text-sm"
+                              placeholder={checkoutForm.discountType === 'percentage' ? 'Enter percentage' : 'Enter amount'}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setCheckoutForm({ ...checkoutForm, discountType: '', discountValue: '' })}
+                              className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-xs font-semibold"
+                              title="Remove discount"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </div>
 
                       {/* Payment Method */}
                       <div>

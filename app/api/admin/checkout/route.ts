@@ -11,7 +11,7 @@ const razorpay = new Razorpay({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { customerName, contactNumber, orderType } = body;
+    const { customerName, contactNumber, orderType, discountType, discountValue } = body;
 
     if (!customerName || !contactNumber) {
       return NextResponse.json(
@@ -52,6 +52,20 @@ export async function POST(request: NextRequest) {
       total += packingCharge;
     }
     // Dine-in has no additional charges
+
+    // Apply discount if provided
+    let discountAmount = 0;
+    if (discountType && discountValue) {
+      const discountVal = parseFloat(discountValue);
+      if (!isNaN(discountVal) && discountVal > 0) {
+        if (discountType === 'percentage') {
+          discountAmount = (total * discountVal) / 100;
+        } else if (discountType === 'fixed') {
+          discountAmount = discountVal;
+        }
+        total = Math.max(0, total - discountAmount);
+      }
+    }
 
     if (total <= 0) {
       return NextResponse.json(
