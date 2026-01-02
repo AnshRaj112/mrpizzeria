@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import crypto from 'crypto';
+import { notifyOrderUpdate } from '@/lib/notifications';
 
 // POST - Verify admin payment and create order
 export async function POST(request: NextRequest) {
@@ -116,6 +117,26 @@ export async function POST(request: NextRequest) {
     };
 
     const insertResult = await db.collection('orders').insertOne(orderData);
+    const orderId = insertResult.insertedId.toString();
+
+    // Notify admin about new order
+    try {
+      const notificationData = {
+        type: 'new_order',
+        orderId: orderId,
+        dailyOrderId: dailyOrderId,
+        customerName: customerName || 'Admin Order',
+        contactNumber: contactNumber || '',
+        orderType: orderType || 'takeaway',
+        total: total,
+        createdAt: new Date().toISOString(),
+      };
+      notifyOrderUpdate('admin:new-orders', notificationData);
+      console.log('Admin notified about new order:', dailyOrderId);
+    } catch (notifyError) {
+      console.error('Error notifying admin about new order:', notifyError);
+      // Don't fail the order if notification fails
+    }
 
     // Clear cart after successful order
     await db.collection('admin_cart').updateOne(

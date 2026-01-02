@@ -35,7 +35,7 @@ export default function AdminPage() {
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
   const [lowStockNotifications, setLowStockNotifications] = useState<any[]>([]);
   const [editingQuantity, setEditingQuantity] = useState<{ itemId: number; quantity: number } | null>(null);
@@ -55,6 +55,12 @@ export default function AdminPage() {
     orderType: 'takeaway' as 'takeaway' | 'dine-in' | 'delivery',
     deliveryAddress: '',
   });
+  const [newOrderNotification, setNewOrderNotification] = useState<{
+    dailyOrderId: number;
+    customerName: string;
+    orderType: string;
+    total: number;
+  } | null>(null);
 
   // Calculate cart total based on order type
   const cartTotal = useMemo(() => {
@@ -154,6 +160,79 @@ export default function AdminPage() {
       return () => clearInterval(interval);
     }
   }, [activeTab]);
+
+  // Real-time admin order notifications using SSE
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+
+    const setupSSE = () => {
+      try {
+        console.log('Connecting to admin notifications SSE...');
+        eventSource = new EventSource('/api/admin/notifications');
+
+        eventSource.onopen = () => {
+          console.log('Admin notifications SSE connection opened');
+        };
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log('Admin notification received:', data);
+
+            if (data.type === 'connected') {
+              console.log('Connected to admin notifications');
+              return;
+            }
+
+            if (data.type === 'new_order') {
+              console.log('New order notification:', data);
+              // Show notification
+              setNewOrderNotification({
+                dailyOrderId: data.dailyOrderId,
+                customerName: data.customerName,
+                orderType: data.orderType,
+                total: data.total,
+              });
+
+              // Auto-navigate to orders tab
+              setActiveTab('orders');
+              
+              // Refresh orders list
+              fetchOrders();
+
+              // Auto-hide notification after 5 seconds
+              setTimeout(() => {
+                setNewOrderNotification(null);
+              }, 5000);
+            }
+          } catch (error) {
+            console.error('Error parsing admin notification:', error);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('Admin notifications SSE error:', error);
+          // Try to reconnect after 5 seconds
+          setTimeout(() => {
+            if (eventSource) {
+              eventSource.close();
+            }
+            setupSSE();
+          }, 5000);
+        };
+      } catch (error) {
+        console.error('Error setting up admin notifications SSE:', error);
+      }
+    };
+
+    setupSSE();
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [fetchOrders]);
 
   // Fetch past orders when date changes
   useEffect(() => {
@@ -1175,10 +1254,38 @@ export default function AdminPage() {
               className={`mb-6 p-4 rounded-lg ${
                 message.type === 'success'
                   ? 'bg-green-100 text-green-800 border-2 border-green-300'
+                  : message.type === 'warning'
+                  ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-300'
                   : 'bg-red-100 text-red-800 border-2 border-red-300'
               }`}
             >
               {message.text}
+            </div>
+          )}
+
+          {/* New Order Notification Banner */}
+          {newOrderNotification && (
+            <div className="mb-6 p-4 rounded-lg bg-gradient-to-r from-green-400 to-emerald-500 text-white border-2 border-green-600 shadow-lg animate-pulse">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="text-3xl">🔔</div>
+                  <div>
+                    <div className="font-bold text-lg">
+                      New Order #{newOrderNotification.dailyOrderId} Received!
+                    </div>
+                    <div className="text-sm opacity-90">
+                      {newOrderNotification.customerName} • {newOrderNotification.orderType} • Rs {newOrderNotification.total.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setNewOrderNotification(null)}
+                  className="text-white hover:text-gray-200 font-bold text-xl"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           )}
 

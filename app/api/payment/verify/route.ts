@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import clientPromise from '@/lib/mongodb';
+import { notifyOrderUpdate } from '@/lib/notifications';
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,6 +70,25 @@ export async function POST(request: NextRequest) {
         });
 
         orderId = insertResult.insertedId.toString();
+
+        // Notify admin about new order
+        try {
+          const notificationData = {
+            type: 'new_order',
+            orderId: orderId,
+            dailyOrderId: dailyOrderId,
+            customerName: orderData.customerName || 'Customer',
+            contactNumber: orderData.contactNumber || '',
+            orderType: orderData.orderType || 'takeaway',
+            total: orderData.total || 0,
+            createdAt: new Date().toISOString(),
+          };
+          notifyOrderUpdate('admin:new-orders', notificationData);
+          console.log('Admin notified about new order:', dailyOrderId);
+        } catch (notifyError) {
+          console.error('Error notifying admin about new order:', notifyError);
+          // Don't fail the order if notification fails
+        }
 
         // Save customer contact number for bulk messaging
         if (orderData.contactNumber) {
