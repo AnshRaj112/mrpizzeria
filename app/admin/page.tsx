@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import ConfirmDialog from '@/components/ConfirmDialog';
 
@@ -16,9 +16,12 @@ interface FoodItem {
   subCategory: string;
   price: number;
   image: string;
+  quantity?: number;
+  lowStockThreshold?: number;
+  isVisible?: boolean;
 }
 
-type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts';
+type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts' | 'reports' | 'cart';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<Tab>('charges');
@@ -34,6 +37,36 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
+  const [lowStockNotifications, setLowStockNotifications] = useState<any[]>([]);
+  const [editingQuantity, setEditingQuantity] = useState<{ itemId: number; quantity: number } | null>(null);
+  const [reportDate, setReportDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [reportData, setReportData] = useState<any>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [cart, setCart] = useState<any[]>([]);
+  const [cartSubtotal, setCartSubtotal] = useState<number>(0);
+  const [deliveryCharge, setDeliveryCharge] = useState<number>(5.00);
+  const [packingCharge, setPackingCharge] = useState<number>(2.00);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'online' | 'cash'>('online');
+  const [cartSearchQuery, setCartSearchQuery] = useState('');
+  const [checkoutForm, setCheckoutForm] = useState({
+    customerName: '',
+    contactNumber: '',
+    orderType: 'takeaway' as 'takeaway' | 'dine-in' | 'delivery',
+    deliveryAddress: '',
+  });
+
+  // Calculate cart total based on order type
+  const cartTotal = useMemo(() => {
+    let total = cartSubtotal;
+    if (checkoutForm.orderType === 'delivery') {
+      total += deliveryCharge + packingCharge;
+    } else if (checkoutForm.orderType === 'takeaway') {
+      total += packingCharge;
+    }
+    // Dine-in has no additional charges
+    return total;
+  }, [cartSubtotal, checkoutForm.orderType, deliveryCharge, packingCharge]);
   
   // Item form state
   const [editingItem, setEditingItem] = useState<FoodItem | null>(null);
@@ -43,6 +76,7 @@ export default function AdminPage() {
     subCategory: '',
     price: '',
     image: '',
+    lowStockThreshold: '10',
   });
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url');
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -71,7 +105,45 @@ export default function AdminPage() {
     fetchOrders();
     fetchPastOrders();
     fetchDiscounts();
+    fetchLowStockNotifications();
+    fetchCart();
   }, []);
+
+  const fetchCharges = async () => {
+    try {
+      const response = await fetch('/api/charges');
+      if (response.ok) {
+        const data = await response.json();
+        // Update charges for charges tab
+        setCharges(data);
+        // Update charges for cart calculations
+        setDeliveryCharge(data.deliveryCharge || 5.00);
+        setPackingCharge(data.packingCharge || 2.00);
+      }
+    } catch (error) {
+      console.error('Error fetching charges:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-sync cart every 5 seconds
+  useEffect(() => {
+    const cartInterval = setInterval(() => {
+      fetchCart();
+    }, 5000);
+    return () => clearInterval(cartInterval);
+  }, []);
+
+  // Auto-refresh low stock notifications
+  useEffect(() => {
+    if (activeTab === 'items') {
+      const interval = setInterval(() => {
+        fetchLowStockNotifications();
+      }, 10000); // Check every 10 seconds
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
 
   // Auto-refresh orders every 5 seconds
   useEffect(() => {
@@ -90,20 +162,6 @@ export default function AdminPage() {
     }
   }, [selectedDate, activeTab]);
 
-  const fetchCharges = async () => {
-    try {
-      const response = await fetch('/api/charges');
-      if (response.ok) {
-        const data = await response.json();
-        setCharges(data);
-      }
-    } catch (error) {
-      console.error('Error fetching charges:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const fetchItems = async () => {
     try {
       const response = await fetch('/api/items');
@@ -113,6 +171,454 @@ export default function AdminPage() {
       }
     } catch (error) {
       console.error('Error fetching items:', error);
+    }
+  };
+
+  const fetchLowStockNotifications = async () => {
+    try {
+      const response = await fetch('/api/notifications/low-stock?unreadOnly=true');
+      if (response.ok) {
+        const data = await response.json();
+        setLowStockNotifications(data);
+        
+        // Show alert if there are new low stock items
+        if (data.length > 0 && activeTab !== 'items') {
+          setMessage({
+            type: 'warning',
+            text: `⚠️ ${data.length} item(s) are running low on stock!`,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching low stock notifications:', error);
+    }
+  };
+
+  const updateQuantity = async (itemId: number, quantity: number) => {
+    try {
+      const response = await fetch('/api/items/update-quantity', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId, quantity }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setMessage({
+          type: 'success',
+          text: `Quantity updated successfully! ${data.isLowStock ? '⚠️ Low stock alert!' : ''}`,
+        });
+        fetchItems();
+        fetchLowStockNotifications();
+        setEditingQuantity(null);
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to update quantity' });
+      }
+    } catch (error) {
+      console.error('Error updating quantity:', error);
+      setMessage({ type: 'error', text: 'Error updating quantity' });
+    }
+  };
+
+  const toggleVisibility = async (itemId: number, currentVisibility: boolean) => {
+    const newVisibility = !currentVisibility;
+    
+    // Optimistically update the UI immediately
+    setItems((prevItems) =>
+      prevItems.map((item) =>
+        item.id === itemId ? { ...item, isVisible: newVisibility } : item
+      )
+    );
+
+    try {
+      const response = await fetch('/api/items', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id: itemId, isVisible: newVisibility }),
+      });
+
+      if (response.ok) {
+        setMessage({
+          type: 'success',
+          text: `Item ${newVisibility ? 'shown' : 'hidden'} successfully!`,
+        });
+        // No need to refetch - we already updated the state
+      } else {
+        // Revert on error
+        setItems((prevItems) =>
+          prevItems.map((item) =>
+            item.id === itemId ? { ...item, isVisible: currentVisibility } : item
+          )
+        );
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to toggle visibility' });
+      }
+    } catch (error) {
+      // Revert on error
+      setItems((prevItems) =>
+        prevItems.map((item) =>
+          item.id === itemId ? { ...item, isVisible: currentVisibility } : item
+        )
+      );
+      console.error('Error toggling visibility:', error);
+      setMessage({ type: 'error', text: 'Error toggling visibility' });
+    }
+  };
+
+  const markNotificationRead = async (notificationId: string) => {
+    try {
+      const response = await fetch('/api/notifications/low-stock', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ notificationId }),
+      });
+
+      if (response.ok) {
+        fetchLowStockNotifications();
+      }
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
+  const fetchSalesReport = async () => {
+    setReportLoading(true);
+    try {
+      const response = await fetch(`/api/reports/sales?date=${reportDate}`);
+      if (response.ok) {
+        const data = await response.json();
+        setReportData(data);
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to fetch sales report' });
+      }
+    } catch (error) {
+      console.error('Error fetching sales report:', error);
+      setMessage({ type: 'error', text: 'Error fetching sales report' });
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const downloadReport = async (category: 'retail' | 'produce' | 'all') => {
+    try {
+      const url = `/api/reports/download?date=${reportDate}&category=${category}`;
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = `sales-report-${reportDate}-${category}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(downloadUrl);
+        
+        setMessage({
+          type: 'success',
+          text: `Sales report downloaded successfully!`,
+        });
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to download report' });
+      }
+    } catch (error) {
+      console.error('Error downloading report:', error);
+      setMessage({ type: 'error', text: 'Error downloading report' });
+    }
+  };
+
+  // Cart functions
+  const fetchCart = async () => {
+    try {
+      const response = await fetch('/api/admin/cart');
+      if (response.ok) {
+        const data = await response.json();
+        setCart(data.items || []);
+        // Calculate subtotal (without charges)
+        const subtotal = (data.items || []).reduce(
+          (sum: number, item: any) => sum + item.price * item.quantity,
+          0
+        );
+        setCartSubtotal(subtotal);
+      }
+    } catch (error) {
+      console.error('Error fetching cart:', error);
+    }
+  };
+
+  const addToCart = async (item: FoodItem) => {
+    try {
+      // For retail items, always add quantity 1, not the stock quantity
+      const itemToAdd = {
+        ...item,
+        quantity: 1, // Always add 1 item to cart, regardless of stock quantity
+      };
+
+      const response = await fetch('/api/admin/cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ item: itemToAdd }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCart(data.items || []);
+        // Calculate subtotal (without charges)
+        const subtotal = (data.items || []).reduce(
+          (sum: number, item: any) => sum + item.price * item.quantity,
+          0
+        );
+        setCartSubtotal(subtotal);
+        setMessage({
+          type: 'success',
+          text: `${item.name} added to cart!`,
+        });
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to add item to cart' });
+      }
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+      setMessage({ type: 'error', text: 'Error adding item to cart' });
+    }
+  };
+
+  const updateCartQuantity = async (itemId: number, quantity: number) => {
+    try {
+      const response = await fetch('/api/admin/cart', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId, quantity }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCart(data.items || []);
+        // Calculate subtotal (without charges)
+        const subtotal = (data.items || []).reduce(
+          (sum: number, item: any) => sum + item.price * item.quantity,
+          0
+        );
+        setCartSubtotal(subtotal);
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to update cart' });
+      }
+    } catch (error) {
+      console.error('Error updating cart:', error);
+      setMessage({ type: 'error', text: 'Error updating cart' });
+    }
+  };
+
+  const removeFromCart = async (itemId: number) => {
+    try {
+      const response = await fetch(`/api/admin/cart?itemId=${itemId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        fetchCart();
+        setMessage({
+          type: 'success',
+          text: 'Item removed from cart!',
+        });
+      } else {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to remove item' });
+      }
+    } catch (error) {
+      console.error('Error removing from cart:', error);
+      setMessage({ type: 'error', text: 'Error removing item' });
+    }
+  };
+
+  const clearCart = async () => {
+    try {
+      const response = await fetch('/api/admin/cart', {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setCart([]);
+        setCartSubtotal(0);
+        setMessage({
+          type: 'success',
+          text: 'Cart cleared!',
+        });
+      }
+    } catch (error) {
+      console.error('Error clearing cart:', error);
+      setMessage({ type: 'error', text: 'Error clearing cart' });
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (!checkoutForm.customerName || !checkoutForm.contactNumber) {
+      setMessage({ type: 'error', text: 'Please fill in customer name and contact number' });
+      return;
+    }
+
+    if (checkoutForm.orderType === 'delivery' && !checkoutForm.deliveryAddress.trim()) {
+      setMessage({ type: 'error', text: 'Please enter delivery address' });
+      return;
+    }
+
+    if (cart.length === 0) {
+      setMessage({ type: 'error', text: 'Cart is empty' });
+      return;
+    }
+
+    setCheckoutLoading(true);
+    try {
+      // Handle cash payment
+      if (paymentMethod === 'cash') {
+        const response = await fetch('/api/admin/payment/cash', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(checkoutForm),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setMessage({
+            type: 'success',
+            text: `Order #${data.dailyOrderId} placed successfully with cash payment!`,
+          });
+          setCheckoutForm({
+            customerName: '',
+            contactNumber: '',
+            orderType: 'takeaway',
+            deliveryAddress: '',
+          });
+          fetchCart();
+          fetchOrders();
+        } else {
+          const error = await response.json();
+          setMessage({ type: 'error', text: error.error || 'Failed to create order' });
+        }
+        setCheckoutLoading(false);
+        return;
+      }
+
+      // Handle online payment (Razorpay)
+      const response = await fetch('/api/admin/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(checkoutForm),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        setMessage({ type: 'error', text: error.error || 'Failed to create order' });
+        setCheckoutLoading(false);
+        return;
+      }
+
+      const data = await response.json();
+
+      // Get Razorpay key from API
+      const keyResponse = await fetch('/api/payment/get-key');
+      if (!keyResponse.ok) {
+        setMessage({ type: 'error', text: 'Payment gateway configuration error' });
+        setCheckoutLoading(false);
+        return;
+      }
+      const { key } = await keyResponse.json();
+
+      if (!key) {
+        setMessage({ type: 'error', text: 'Payment gateway configuration error' });
+        setCheckoutLoading(false);
+        return;
+      }
+
+      // Load Razorpay script
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => {
+        const options = {
+          key: key,
+          amount: Math.round(data.amount * 100),
+          currency: 'INR',
+          name: 'Mr. Pizzeria',
+          description: 'Admin Order',
+          order_id: data.orderId,
+          handler: async function (response: any) {
+            try {
+              const verifyResponse = await fetch('/api/admin/payment/verify', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  ...response,
+                  ...checkoutForm,
+                }),
+              });
+
+              if (verifyResponse.ok) {
+                const verifyData = await verifyResponse.json();
+                setMessage({
+                  type: 'success',
+                  text: `Order #${verifyData.dailyOrderId} placed successfully!`,
+                });
+                setCheckoutForm({
+                  customerName: '',
+                  contactNumber: '',
+                  orderType: 'takeaway',
+                  deliveryAddress: '',
+                });
+                fetchCart();
+                fetchOrders();
+              } else {
+                const error = await verifyResponse.json();
+                setMessage({ type: 'error', text: error.error || 'Payment verification failed' });
+              }
+            } catch (error) {
+              console.error('Error verifying payment:', error);
+              setMessage({ type: 'error', text: 'Error verifying payment' });
+            } finally {
+              setCheckoutLoading(false);
+            }
+          },
+          prefill: {
+            name: checkoutForm.customerName,
+            contact: checkoutForm.contactNumber,
+          },
+          theme: {
+            color: '#0ea5e9',
+          },
+        };
+
+        const razorpay = new (window as any).Razorpay(options);
+        razorpay.open();
+        razorpay.on('payment.failed', function (response: any) {
+          setMessage({ type: 'error', text: 'Payment failed. Please try again.' });
+          setCheckoutLoading(false);
+        });
+      };
+      document.body.appendChild(script);
+    } catch (error) {
+      console.error('Error during checkout:', error);
+      setMessage({ type: 'error', text: 'Error during checkout' });
+      setCheckoutLoading(false);
     }
   };
 
@@ -270,10 +776,15 @@ export default function AdminPage() {
     setMessage(null);
 
     try {
-      const itemData = {
+      const itemData: any = {
         ...itemForm,
         price: parseFloat(itemForm.price),
       };
+
+      // Add low stock threshold for retail items
+      if (itemForm.category === 'retail') {
+        itemData.lowStockThreshold = parseInt(itemForm.lowStockThreshold) || 10;
+      }
 
       const url = editingItem ? '/api/items' : '/api/items';
       const method = editingItem ? 'PUT' : 'POST';
@@ -314,6 +825,7 @@ export default function AdminPage() {
       subCategory: item.subCategory,
       price: item.price.toString(),
       image: item.image,
+      lowStockThreshold: item.lowStockThreshold?.toString() || '10',
     });
     setImagePreview(item.image);
     setImageMode('url');
@@ -352,6 +864,7 @@ export default function AdminPage() {
       subCategory: '',
       price: '',
       image: '',
+      lowStockThreshold: '10',
     });
     setEditingItem(null);
     setImagePreview('');
@@ -621,6 +1134,39 @@ export default function AdminPage() {
             >
               Discounts
             </button>
+            <button
+              onClick={() => {
+                setActiveTab('reports');
+                setMessage(null);
+                fetchSalesReport();
+              }}
+              className={`px-6 py-3 font-semibold transition-colors ${
+                activeTab === 'reports'
+                  ? 'text-sky-500 border-b-2 border-sky-500'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              Reports
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('cart');
+                setMessage(null);
+                fetchCart();
+              }}
+              className={`px-6 py-3 font-semibold transition-colors relative ${
+                activeTab === 'cart'
+                  ? 'text-sky-500 border-b-2 border-sky-500'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              Cart
+              {cart.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {cart.reduce((sum, item) => sum + item.quantity, 0)}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* Message */}
@@ -840,6 +1386,25 @@ export default function AdminPage() {
                       </div>
                     </div>
 
+                    {itemForm.category === 'retail' && (
+                      <div>
+                        <label className="block text-sm font-semibold text-black mb-2">
+                          Low Stock Threshold
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={itemForm.lowStockThreshold}
+                          onChange={(e) => handleItemFormChange('lowStockThreshold', e.target.value)}
+                          className="w-full px-4 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black"
+                          placeholder="10"
+                        />
+                        <p className="text-xs text-gray-600 mt-1">
+                          Alert when stock drops below this number
+                        </p>
+                      </div>
+                    )}
+
                     <div className="md:col-span-2">
                       <label className="block text-sm font-semibold text-black mb-2">
                         Image <span className="text-red-500">*</span>
@@ -952,47 +1517,171 @@ export default function AdminPage() {
                 </form>
               </div>
 
+              {/* Low Stock Alerts */}
+              {lowStockNotifications.length > 0 && (
+                <div className="mb-6 p-4 bg-red-50 border-2 border-red-200 rounded-xl">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-bold text-red-800">⚠️ Low Stock Alerts</h3>
+                    <button
+                      onClick={() => {
+                        lowStockNotifications.forEach((notif) => markNotificationRead(notif._id));
+                      }}
+                      className="text-sm text-red-600 hover:text-red-800 font-semibold"
+                    >
+                      Mark all as read
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {lowStockNotifications.map((notif) => (
+                      <div
+                        key={notif._id}
+                        className="flex items-center justify-between p-2 bg-white rounded-lg border border-red-200"
+                      >
+                        <div>
+                          <span className="font-semibold text-black">{notif.itemName}</span>
+                          <span className="text-sm text-gray-600 ml-2">
+                            - Stock: {notif.quantity} (Threshold: {notif.threshold})
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => markNotificationRead(notif._id)}
+                          className="text-xs text-red-600 hover:text-red-800 font-semibold"
+                        >
+                          ✓ Read
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Items List */}
               <div>
                 <h2 className="text-2xl font-bold text-black mb-4">All Items ({items.length})</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="bg-white border-2 border-sky-100 rounded-xl p-4 hover:border-sky-200 hover:shadow-md transition-all"
-                    >
-                      <div className="relative w-full h-32 mb-3 rounded-lg overflow-hidden">
-                        <Image
-                          src={item.image}
-                          alt={item.name}
-                          fill
-                          className="object-cover"
-                          unoptimized
-                        />
+                  {items.map((item) => {
+                    const isLowStock = item.category === 'retail' && item.quantity !== undefined && item.lowStockThreshold !== undefined && item.quantity <= item.lowStockThreshold;
+                    const isHidden = item.isVisible === false;
+                    
+                    return (
+                      <div
+                        key={item.id}
+                        className={`bg-white border-2 rounded-xl p-4 hover:shadow-md transition-all ${
+                          isHidden ? 'opacity-50 border-gray-300' : isLowStock ? 'border-red-300 bg-red-50' : 'border-sky-100 hover:border-sky-200'
+                        }`}
+                      >
+                        {isHidden && (
+                          <div className="mb-2 px-2 py-1 bg-gray-200 text-gray-600 text-xs font-semibold rounded text-center">
+                            HIDDEN FROM USERS
+                          </div>
+                        )}
+                        {isLowStock && (
+                          <div className="mb-2 px-2 py-1 bg-red-200 text-red-800 text-xs font-semibold rounded text-center">
+                            ⚠️ LOW STOCK
+                          </div>
+                        )}
+                        <div className="relative w-full h-32 mb-3 rounded-lg overflow-hidden">
+                          <Image
+                            src={item.image}
+                            alt={item.name}
+                            fill
+                            className="object-cover"
+                            unoptimized
+                          />
+                        </div>
+                        <h3 className="font-bold text-black mb-1">{item.name}</h3>
+                        <p className="text-sm text-gray-600 capitalize mb-2">
+                          {item.category} - {item.subCategory}
+                        </p>
+                        <p className="text-lg font-bold text-sky-500 mb-2">
+                          Rs {item.price.toFixed(2)}
+                        </p>
+                        
+                        {/* Quantity Management for Retail Items */}
+                        {item.category === 'retail' && (
+                          <div className="mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-semibold text-gray-700">Stock:</span>
+                              {editingQuantity?.itemId === item.id ? (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={editingQuantity.quantity}
+                                    onChange={(e) => setEditingQuantity({ itemId: item.id, quantity: parseInt(e.target.value) || 0 })}
+                                    className="w-16 px-2 py-1 text-sm border border-gray-300 rounded text-black"
+                                    autoFocus
+                                  />
+                                  <button
+                                    onClick={() => updateQuantity(item.id, editingQuantity.quantity)}
+                                    className="px-2 py-1 bg-green-200 text-green-800 rounded text-xs font-semibold hover:bg-green-300"
+                                  >
+                                    ✓
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingQuantity(null)}
+                                    className="px-2 py-1 bg-gray-200 text-gray-800 rounded text-xs font-semibold hover:bg-gray-300"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-sm font-bold ${isLowStock ? 'text-red-600' : 'text-black'}`}>
+                                    {item.quantity ?? 0}
+                                  </span>
+                                  <button
+                                    onClick={() => setEditingQuantity({ itemId: item.id, quantity: item.quantity ?? 0 })}
+                                    className="px-2 py-1 bg-blue-200 text-blue-800 rounded text-xs font-semibold hover:bg-blue-300"
+                                  >
+                                    Edit
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {item.lowStockThreshold !== undefined && (
+                              <p className="text-xs text-gray-500">
+                                Low stock threshold: {item.lowStockThreshold}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 flex-wrap">
+                          <button
+                            onClick={() => addToCart(item)}
+                            className="flex-1 px-3 py-2 bg-green-200 text-green-800 rounded-lg hover:bg-green-300 transition-colors text-sm font-semibold"
+                            title="Add to cart"
+                          >
+                            🛒 Add to Cart
+                          </button>
+                          <button
+                            onClick={() => handleEditItem(item)}
+                            className="px-3 py-2 bg-sky-200 text-black rounded-lg hover:bg-sky-300 transition-colors text-sm font-semibold"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => toggleVisibility(item.id, item.isVisible ?? true)}
+                            className={`px-3 py-2 rounded-lg transition-colors text-sm font-semibold ${
+                              item.isVisible === false
+                                ? 'bg-green-200 text-green-800 hover:bg-green-300'
+                                : 'bg-yellow-200 text-yellow-800 hover:bg-yellow-300'
+                            }`}
+                            title={item.isVisible === false ? 'Show to users' : 'Hide from users'}
+                          >
+                            {item.isVisible === false ? '👁️ Show' : '🙈 Hide'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteItem(item.id)}
+                            className="px-3 py-2 bg-red-200 text-red-800 rounded-lg hover:bg-red-300 transition-colors text-sm font-semibold"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <h3 className="font-bold text-black mb-1">{item.name}</h3>
-                      <p className="text-sm text-gray-600 capitalize mb-2">
-                        {item.category} - {item.subCategory}
-                      </p>
-                      <p className="text-lg font-bold text-sky-500 mb-3">
-                        Rs {item.price.toFixed(2)}
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleEditItem(item)}
-                          className="flex-1 px-3 py-2 bg-sky-200 text-black rounded-lg hover:bg-sky-300 transition-colors text-sm font-semibold"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteItem(item.id)}
-                          className="flex-1 px-3 py-2 bg-red-200 text-red-800 rounded-lg hover:bg-red-300 transition-colors text-sm font-semibold"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {items.length === 0 && (
                   <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
@@ -1517,6 +2206,529 @@ export default function AdminPage() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Reports Tab */}
+          {activeTab === 'reports' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm">
+                <h2 className="text-2xl font-bold text-black mb-6">Sales Reports</h2>
+                
+                {/* Date Selection */}
+                <div className="mb-6 p-4 bg-sky-50 rounded-xl border-2 border-sky-200">
+                  <div className="flex items-center gap-4 mb-4">
+                    <label className="text-sm font-semibold text-black">Select Date:</label>
+                    <input
+                      type="date"
+                      value={reportDate}
+                      onChange={(e) => setReportDate(e.target.value)}
+                      className="px-4 py-2 border-2 border-gray-200 rounded-lg text-black focus:border-sky-300 focus:outline-none"
+                    />
+                    <button
+                      onClick={fetchSalesReport}
+                      disabled={reportLoading}
+                      className="px-6 py-2 bg-sky-300 text-white rounded-lg hover:bg-sky-400 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {reportLoading ? 'Loading...' : 'Generate Report'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Download Buttons */}
+                {reportData && (
+                  <div className="mb-6 p-4 bg-green-50 rounded-xl border-2 border-green-200">
+                    <h3 className="text-lg font-bold text-black mb-3">Download Reports</h3>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        onClick={() => downloadReport('all')}
+                        className="px-6 py-3 bg-gradient-to-r from-sky-300 to-cyan-300 text-white rounded-xl hover:from-sky-400 hover:to-cyan-400 transition-all font-bold shadow-lg hover:shadow-xl"
+                      >
+                        📊 Download All Items
+                      </button>
+                      <button
+                        onClick={() => downloadReport('retail')}
+                        className="px-6 py-3 bg-gradient-to-r from-blue-300 to-indigo-300 text-white rounded-xl hover:from-blue-400 hover:to-indigo-400 transition-all font-bold shadow-lg hover:shadow-xl"
+                      >
+                        🛒 Download Retail Only
+                      </button>
+                      <button
+                        onClick={() => downloadReport('produce')}
+                        className="px-6 py-3 bg-gradient-to-r from-green-300 to-emerald-300 text-white rounded-xl hover:from-green-400 hover:to-emerald-400 transition-all font-bold shadow-lg hover:shadow-xl"
+                      >
+                        🥬 Download Produce Only
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Report Summary */}
+                {reportData && (
+                  <div className="mb-6 p-4 bg-gray-50 rounded-xl border-2 border-gray-200">
+                    <h3 className="text-lg font-bold text-black mb-3">Report Summary</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">Total Revenue</p>
+                        <p className="text-xl font-bold text-black">Rs {reportData.summary?.totalRevenue?.toFixed(2) || '0.00'}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">Total Items Sold</p>
+                        <p className="text-xl font-bold text-black">{reportData.summary?.totalSold || 0}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">Retail Items</p>
+                        <p className="text-xl font-bold text-black">{reportData.summary?.totalRetailItems || 0}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">Produce Items</p>
+                        <p className="text-xl font-bold text-black">{reportData.summary?.totalProduceItems || 0}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Retail Items Report */}
+                {reportData && reportData.retail && reportData.retail.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-xl font-bold text-black mb-4">Retail Items</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse bg-white rounded-lg border-2 border-gray-200">
+                        <thead>
+                          <tr className="bg-sky-100">
+                            <th className="border border-gray-300 px-4 py-2 text-left text-sm font-bold text-black">Item Name</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Opening Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Added Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Sold Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Closing Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Revenue (Rs)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reportData.retail.map((item: any) => (
+                            <tr key={item.id} className="hover:bg-gray-50">
+                              <td className="border border-gray-300 px-4 py-2 text-sm text-black">{item.name}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.openingQuantity ?? 'N/A'}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.addedQuantity}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm font-semibold text-black">{item.soldQuantity}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.closingQuantity ?? 'N/A'}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm font-semibold text-green-600">Rs {item.totalRevenue.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Produce Items Report */}
+                {reportData && reportData.produce && reportData.produce.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-xl font-bold text-black mb-4">Produce Items</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse bg-white rounded-lg border-2 border-gray-200">
+                        <thead>
+                          <tr className="bg-green-100">
+                            <th className="border border-gray-300 px-4 py-2 text-left text-sm font-bold text-black">Item Name</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Opening Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Added Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Sold Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Closing Qty</th>
+                            <th className="border border-gray-300 px-4 py-2 text-center text-sm font-bold text-black">Revenue (Rs)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reportData.produce.map((item: any) => (
+                            <tr key={item.id} className="hover:bg-gray-50">
+                              <td className="border border-gray-300 px-4 py-2 text-sm text-black">{item.name}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.openingQuantity ?? 'N/A'}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.addedQuantity}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm font-semibold text-black">{item.soldQuantity}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm text-black">{item.closingQuantity ?? 'N/A'}</td>
+                              <td className="border border-gray-300 px-4 py-2 text-center text-sm font-semibold text-green-600">Rs {item.totalRevenue.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {reportData && reportData.retail?.length === 0 && reportData.produce?.length === 0 && (
+                  <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
+                    <p className="text-gray-600">No sales data found for the selected date.</p>
+                  </div>
+                )}
+
+                {!reportData && !reportLoading && (
+                  <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
+                    <p className="text-gray-600">Select a date and click "Generate Report" to view sales data.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Cart Tab */}
+          {activeTab === 'cart' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-250px)]">
+              {/* Left Side - Products */}
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm overflow-hidden flex flex-col">
+                <h2 className="text-2xl font-bold text-black mb-4">Products</h2>
+                
+                {/* Search Bar */}
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    value={cartSearchQuery}
+                    onChange={(e) => setCartSearchQuery(e.target.value)}
+                    placeholder="Search items..."
+                    className="w-full px-4 py-2 rounded-lg border-2 border-gray-200 focus:border-sky-400 focus:outline-none bg-white text-black"
+                  />
+                </div>
+
+                {/* All Food Items Section */}
+                <div className="flex-1 overflow-y-auto">
+                  {(() => {
+                    const filteredItems = items.filter((item) =>
+                      item.name.toLowerCase().includes(cartSearchQuery.toLowerCase()) ||
+                      item.category.toLowerCase().includes(cartSearchQuery.toLowerCase()) ||
+                      item.subCategory.toLowerCase().includes(cartSearchQuery.toLowerCase())
+                    );
+
+                    if (filteredItems.length === 0) {
+                      return (
+                        <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-gray-200">
+                          <p className="text-gray-600">No items found matching your search.</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 gap-3">
+                        {filteredItems.map((item) => {
+                          const cartItem = cart.find((ci: any) => ci.id === item.id);
+                          const inCart = cartItem !== undefined;
+                          
+                          return (
+                            <div
+                              key={item.id}
+                              className="bg-white border-2 border-sky-100 rounded-xl p-3 hover:border-sky-200 hover:shadow-md transition-all"
+                            >
+                              <div className="flex gap-3">
+                                <div className="relative w-20 h-20 rounded-lg overflow-hidden flex-shrink-0">
+                                  <Image
+                                    src={item.image}
+                                    alt={item.name}
+                                    fill
+                                    className="object-cover"
+                                    unoptimized
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <h3 className="font-bold text-black mb-1 truncate">{item.name}</h3>
+                                  <p className="text-xs text-gray-600 capitalize mb-1">
+                                    {item.category} - {item.subCategory}
+                                  </p>
+                                  <p className="text-sm font-bold text-sky-500 mb-2">
+                                    Rs {item.price.toFixed(2)}
+                                  </p>
+                                  {inCart ? (
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => updateCartQuantity(item.id, cartItem.quantity - 1)}
+                                        className="w-6 h-6 rounded-full bg-red-200 text-red-800 hover:bg-red-300 flex items-center justify-center font-bold text-xs"
+                                      >
+                                        −
+                                      </button>
+                                      <span className="w-8 text-center font-semibold text-black text-sm">
+                                        {cartItem.quantity}
+                                      </span>
+                                      <button
+                                        onClick={() => updateCartQuantity(item.id, cartItem.quantity + 1)}
+                                        className="w-6 h-6 rounded-full bg-green-200 text-green-800 hover:bg-green-300 flex items-center justify-center font-bold text-xs"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => addToCart(item)}
+                                      className="px-3 py-1 bg-green-200 text-green-800 rounded-lg hover:bg-green-300 transition-colors text-xs font-semibold"
+                                    >
+                                      Add
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Right Side - Checkout */}
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm overflow-y-auto flex flex-col h-full">
+                <h2 className="text-2xl font-bold text-black mb-4 flex-shrink-0">Checkout</h2>
+                
+                {/* Cart Items */}
+                {cart.length > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between mb-4 flex-shrink-0">
+                      <h3 className="text-lg font-bold text-black">Cart ({cart.length})</h3>
+                      <button
+                        onClick={clearCart}
+                        className="px-3 py-1 bg-red-200 text-red-800 rounded-lg hover:bg-red-300 transition-colors text-xs font-semibold"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="space-y-2 mb-4">
+                      {cart.map((item: any) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200"
+                        >
+                          <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0">
+                            <Image
+                              src={item.image}
+                              alt={item.name}
+                              fill
+                              className="object-cover"
+                              unoptimized
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-black text-sm truncate">{item.name}</h3>
+                            <p className="text-xs text-gray-600">Rs {item.price.toFixed(2)} × {item.quantity}</p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => updateCartQuantity(item.id, item.quantity - 1)}
+                              className="w-6 h-6 rounded-full bg-red-200 text-red-800 hover:bg-red-300 flex items-center justify-center font-bold text-xs"
+                            >
+                              −
+                            </button>
+                            <span className="w-6 text-center font-semibold text-black text-xs">
+                              {item.quantity}
+                            </span>
+                            <button
+                              onClick={() => updateCartQuantity(item.id, item.quantity + 1)}
+                              className="w-6 h-6 rounded-full bg-green-200 text-green-800 hover:bg-green-300 flex items-center justify-center font-bold text-xs"
+                            >
+                              +
+                            </button>
+                            <button
+                              onClick={() => removeFromCart(item.id)}
+                              className="ml-1 text-red-600 hover:text-red-800 text-xs"
+                              title="Remove"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Price Breakdown */}
+                    <div className="border-t-2 border-gray-200 pt-4 mb-4 flex-shrink-0">
+                      <div className="space-y-1 mb-3">
+                        <div className="flex justify-between text-sm text-black">
+                          <span>Subtotal:</span>
+                          <span className="font-semibold">Rs {cartSubtotal.toFixed(2)}</span>
+                        </div>
+                        {checkoutForm.orderType === 'delivery' && (
+                          <>
+                            <div className="flex justify-between text-sm text-black">
+                              <span>Delivery:</span>
+                              <span className="font-semibold">Rs {deliveryCharge.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-black">
+                              <span>Packing:</span>
+                              <span className="font-semibold">Rs {packingCharge.toFixed(2)}</span>
+                            </div>
+                          </>
+                        )}
+                        {checkoutForm.orderType === 'takeaway' && (
+                          <div className="flex justify-between text-sm text-black">
+                            <span>Packing:</span>
+                            <span className="font-semibold">Rs {packingCharge.toFixed(2)}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t-2 border-gray-300 pt-2 mb-4">
+                        <div className="flex justify-between items-center">
+                          <span className="text-lg font-bold text-black">Total:</span>
+                          <span className="text-xl font-bold text-sky-600">
+                            Rs {cartTotal.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Checkout Form */}
+                    <div className="bg-sky-50 rounded-xl p-4 border-2 border-sky-200 space-y-3 flex-shrink-0">
+                      <h3 className="text-lg font-bold text-black">Order Details</h3>
+                      <div>
+                        <label className="block text-xs font-semibold text-black mb-1">
+                          Customer Name *
+                        </label>
+                        <input
+                          type="text"
+                          value={checkoutForm.customerName}
+                          onChange={(e) =>
+                            setCheckoutForm({ ...checkoutForm, customerName: e.target.value })
+                          }
+                          className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-sky-400 focus:outline-none bg-white text-black text-sm"
+                          placeholder="Enter customer name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-black mb-1">
+                          Contact Number *
+                        </label>
+                        <input
+                          type="tel"
+                          value={checkoutForm.contactNumber}
+                          onChange={(e) =>
+                            setCheckoutForm({ ...checkoutForm, contactNumber: e.target.value })
+                          }
+                          className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-sky-400 focus:outline-none bg-white text-black text-sm"
+                          placeholder="Enter contact number"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-black mb-1">
+                          Order Type
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCheckoutForm({
+                                ...checkoutForm,
+                                orderType: 'takeaway',
+                              })
+                            }
+                            className={`px-2 py-1.5 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              checkoutForm.orderType === 'takeaway'
+                                ? 'border-sky-400 bg-sky-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-sky-300'
+                            }`}
+                          >
+                            🥡 Takeaway
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCheckoutForm({
+                                ...checkoutForm,
+                                orderType: 'dine-in',
+                              })
+                            }
+                            className={`px-2 py-1.5 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              checkoutForm.orderType === 'dine-in'
+                                ? 'border-sky-400 bg-sky-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-sky-300'
+                            }`}
+                          >
+                            🍽️ Dine-in
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCheckoutForm({
+                                ...checkoutForm,
+                                orderType: 'delivery',
+                              })
+                            }
+                            className={`px-2 py-1.5 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              checkoutForm.orderType === 'delivery'
+                                ? 'border-sky-400 bg-sky-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-sky-300'
+                            }`}
+                          >
+                            🚚 Delivery
+                          </button>
+                        </div>
+                      </div>
+                      {checkoutForm.orderType === 'delivery' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-black mb-1">
+                            Delivery Address <span className="text-red-500">*</span>
+                          </label>
+                          <textarea
+                            value={checkoutForm.deliveryAddress}
+                            onChange={(e) =>
+                              setCheckoutForm({ ...checkoutForm, deliveryAddress: e.target.value })
+                            }
+                            className="w-full px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-sky-400 focus:outline-none bg-white text-black text-sm"
+                            placeholder="Enter delivery address"
+                            rows={2}
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Payment Method */}
+                      <div>
+                        <label className="block text-xs font-semibold text-black mb-1">
+                          Payment Method
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('cash')}
+                            className={`px-3 py-2 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              paymentMethod === 'cash'
+                                ? 'border-green-400 bg-green-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-green-300'
+                            }`}
+                          >
+                            💵 Cash
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('online')}
+                            className={`px-3 py-2 rounded-lg border-2 transition-all font-semibold text-xs ${
+                              paymentMethod === 'online'
+                                ? 'border-blue-400 bg-blue-200 text-black shadow-md'
+                                : 'border-gray-200 bg-white text-black hover:border-blue-300'
+                            }`}
+                          >
+                            💳 Online
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleCheckout}
+                        disabled={checkoutLoading || cart.length === 0}
+                        className={`w-full px-4 py-3 rounded-xl hover:opacity-90 transition-all font-bold shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed text-sm ${
+                          paymentMethod === 'cash'
+                            ? 'bg-gradient-to-r from-green-400 to-emerald-400 text-white'
+                            : 'bg-gradient-to-r from-sky-300 to-cyan-300 text-white'
+                        }`}
+                      >
+                        {checkoutLoading
+                          ? 'Processing...'
+                          : paymentMethod === 'cash'
+                          ? `Cash Payment - Rs ${cartTotal.toFixed(2)}`
+                          : `Pay Online - Rs ${cartTotal.toFixed(2)}`}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center">
+                      <p className="text-gray-600 text-lg mb-2">Your cart is empty</p>
+                      <p className="text-sm text-gray-500">Add items from the left to get started</p>
+                    </div>
                   </div>
                 )}
               </div>

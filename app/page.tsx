@@ -17,6 +17,9 @@ interface FoodItem {
   subCategory: SubCategory;
   price: number;
   image: string;
+  quantity?: number;
+  lowStockThreshold?: number;
+  isVisible?: boolean;
 }
 
 interface CartItem extends FoodItem {
@@ -51,12 +54,14 @@ export default function Home() {
   const fetchItems = useCallback(async () => {
     try {
       setItemsLoading(true);
-      const response = await fetch('/api/items', {
+      const response = await fetch('/api/items?visibleOnly=true', {
         cache: 'no-store', // Prevent caching
       });
       if (response.ok) {
         const data = await response.json();
-        setFoodItems(data);
+        // Filter out items that are explicitly hidden
+        const visibleItems = data.filter((item: FoodItem) => item.isVisible !== false);
+        setFoodItems(visibleItems);
       } else {
         console.error('Failed to fetch items:', response.status);
       }
@@ -874,17 +879,33 @@ export default function Home() {
                           <div className="p-4">
                             <div className="flex items-start justify-between mb-2">
                               <h3 className="text-lg font-semibold text-black flex-1">{item.name}</h3>
-                              {(() => {
-                                const discountInfo = getDiscountedPrice(item);
-                                if (discountInfo.hasDiscount) {
-                                  return (
-                                    <span className="ml-2 px-2 py-1 bg-red-500 text-white text-xs font-bold rounded-full whitespace-nowrap">
-                                      -{discountInfo.discountPercent}%
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
+                              <div className="flex items-center gap-1 ml-2">
+                                {(() => {
+                                  const discountInfo = getDiscountedPrice(item);
+                                  if (discountInfo.hasDiscount) {
+                                    return (
+                                      <span className="px-2 py-1 bg-red-500 text-white text-xs font-bold rounded-full whitespace-nowrap">
+                                        -{discountInfo.discountPercent}%
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                {(() => {
+                                  // Show limited stock badge for retail items with low quantity
+                                  if (item.category === 'retail' && item.quantity !== undefined && item.lowStockThreshold !== undefined) {
+                                    const isLowStock = item.quantity <= item.lowStockThreshold;
+                                    if (isLowStock && item.quantity > 0) {
+                                      return (
+                                        <span className="px-2 py-1 bg-orange-500 text-white text-xs font-bold rounded-full whitespace-nowrap">
+                                          ⚠️ Limited Stock
+                                        </span>
+                                      );
+                                    }
+                                  }
+                                  return null;
+                                })()}
+                              </div>
                             </div>
                             <div className="flex items-center justify-between mb-3">
                               <span className="text-sm text-black capitalize">{item.subCategory}</span>
@@ -1241,11 +1262,10 @@ export default function Home() {
                 </div>
               </div>
               {/* Order Status Indicator */}
-              {lastOrderStatus && (
+              {lastOrderStatus && lastOrderStatus !== 'pending' && (
                 <div className="mt-4 p-3 bg-white rounded-lg border-2 border-sky-200">
                   <div className="flex items-center gap-3">
                     <div className={`w-3 h-3 rounded-full ${
-                      lastOrderStatus === 'pending' ? 'bg-yellow-400 animate-pulse' :
                       lastOrderStatus === 'being_prepared' ? 'bg-blue-400 animate-pulse' :
                       lastOrderStatus === 'prepared' ? 'bg-green-400' :
                       lastOrderStatus === 'ready_for_pickup' ? 'bg-cyan-400' :
@@ -1256,8 +1276,7 @@ export default function Home() {
                     <div className="flex-1">
                       <p className="text-xs text-gray-600">Order Status</p>
                       <p className="font-bold text-black">
-                        {lastOrderStatus === 'pending' ? '⏳ Pending' :
-                         lastOrderStatus === 'being_prepared' ? '🍳 Being Prepared' :
+                        {lastOrderStatus === 'being_prepared' ? '🍳 Being Prepared' :
                          lastOrderStatus === 'prepared' ? '✅ Prepared' :
                          lastOrderStatus === 'ready_for_pickup' ? '📦 Ready for Pickup' :
                          lastOrderStatus === 'out_for_delivery' ? '🚚 Out for Delivery' :

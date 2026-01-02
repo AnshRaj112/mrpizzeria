@@ -2,11 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 
 // GET - Fetch all items
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const visibleOnly = searchParams.get('visibleOnly') === 'true';
+    
     const client = await clientPromise;
     const db = client.db('mrpizzeria');
-    const items = await db.collection('items').find({}).toArray();
+    
+    let query: any = {};
+    if (visibleOnly) {
+      query.isVisible = { $ne: false }; // Include items where isVisible is true or undefined
+    }
+    
+    const items = await db.collection('items').find(query).toArray();
     
     return NextResponse.json(items);
   } catch (error) {
@@ -53,16 +62,23 @@ export async function POST(request: NextRequest) {
     const lastItem = await db.collection('items').findOne({}, { sort: { id: -1 } });
     const newId = lastItem ? lastItem.id + 1 : 1;
 
-    const newItem = {
+    const newItem: any = {
       id: newId,
       name: name.trim(),
       category,
       subCategory: subCategory.trim(),
       price: parseFloat(price.toFixed(2)),
       image: image.trim(),
+      isVisible: true, // Default to visible
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+
+    // Add quantity fields for retail items
+    if (category === 'retail') {
+      newItem.quantity = 0;
+      newItem.lowStockThreshold = 10; // Default low stock threshold
+    }
 
     await db.collection('items').insertOne(newItem);
 
@@ -80,7 +96,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, name, category, subCategory, price, image } = body;
+    const { id, name, category, subCategory, price, image, quantity, lowStockThreshold, isVisible } = body;
 
     if (!id || typeof id !== 'number') {
       return NextResponse.json(
@@ -89,6 +105,37 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const client = await clientPromise;
+    const db = client.db('mrpizzeria');
+
+    // Fast path: If only visibility is being updated, do a simple update
+    const onlyVisibilityUpdate = 
+      isVisible !== undefined &&
+      name === undefined &&
+      category === undefined &&
+      subCategory === undefined &&
+      price === undefined &&
+      image === undefined &&
+      quantity === undefined &&
+      lowStockThreshold === undefined;
+
+    if (onlyVisibilityUpdate) {
+      const result = await db.collection('items').updateOne(
+        { id },
+        { $set: { isVisible, updatedAt: new Date() } }
+      );
+
+      if (result.matchedCount === 0) {
+        return NextResponse.json(
+          { error: 'Item not found' },
+          { status: 404 }
+        );
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    // Full update path for other changes
     if (category && category !== 'retail' && category !== 'produce') {
       return NextResponse.json(
         { error: 'Category must be either "retail" or "produce"' },
@@ -103,9 +150,6 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const client = await clientPromise;
-    const db = client.db('mrpizzeria');
-
     const updateData: any = {
       updatedAt: new Date(),
     };
@@ -115,6 +159,17 @@ export async function PUT(request: NextRequest) {
     if (subCategory) updateData.subCategory = subCategory.trim();
     if (price !== undefined) updateData.price = parseFloat(price.toFixed(2));
     if (image) updateData.image = image.trim();
+    if (isVisible !== undefined) updateData.isVisible = isVisible;
+    
+    // Quantity management for retail items
+    if (category === 'retail' || quantity !== undefined) {
+      if (quantity !== undefined) {
+        updateData.quantity = Math.max(0, Math.floor(Number(quantity)));
+      }
+      if (lowStockThreshold !== undefined) {
+        updateData.lowStockThreshold = Math.max(0, Math.floor(Number(lowStockThreshold)));
+      }
+    }
 
     const result = await db.collection('items').updateOne(
       { id },
@@ -126,6 +181,23 @@ export async function PUT(request: NextRequest) {
         { error: 'Item not found' },
         { status: 404 }
       );
+    }
+
+    // Check for low stock if quantity was updated for retail items
+    if (quantity !== undefined && category === 'retail') {
+      const updatedItem = await db.collection('items').findOne({ id });
+      if (updatedItem && updatedItem.quantity <= (updatedItem.lowStockThreshold || 10)) {
+        // Store low stock notification (can be checked by admin)
+        await db.collection('notifications').insertOne({
+          type: 'low_stock',
+          itemId: id,
+          itemName: updatedItem.name,
+          quantity: updatedItem.quantity,
+          threshold: updatedItem.lowStockThreshold || 10,
+          createdAt: new Date(),
+          read: false,
+        });
+      }
     }
 
     return NextResponse.json({ success: true });
