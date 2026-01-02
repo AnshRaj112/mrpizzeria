@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     const db = client.db('mrpizzeria');
 
     // Get current cart
-    let cart = await db.collection('admin_cart').findOne({ type: 'admin' });
+    let cart: any = await db.collection('admin_cart').findOne({ type: 'admin' });
 
     if (!cart) {
       cart = {
