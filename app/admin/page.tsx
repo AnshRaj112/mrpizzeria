@@ -133,6 +133,18 @@ export default function AdminPage() {
     }
   };
 
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('/api/orders?type=active');
+      if (response.ok) {
+        const data = await response.json();
+        setOrders(data);
+      }
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    }
+  };
+
   // Auto-sync cart every 5 seconds
   useEffect(() => {
     const cartInterval = setInterval(() => {
@@ -698,18 +710,6 @@ export default function AdminPage() {
       console.error('Error during checkout:', error);
       setMessage({ type: 'error', text: 'Error during checkout' });
       setCheckoutLoading(false);
-    }
-  };
-
-  const fetchOrders = async () => {
-    try {
-      const response = await fetch('/api/orders?type=active');
-      if (response.ok) {
-        const data = await response.json();
-        setOrders(data);
-      }
-    } catch (error) {
-      console.error('Error fetching orders:', error);
     }
   };
 
