@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { notifyOrderUpdate } from '@/lib/notifications';
+import { printReceipt } from '@/lib/pos-printer';
 
 // POST - Create order with cash payment
 export async function POST(request: NextRequest) {
@@ -149,6 +150,33 @@ export async function POST(request: NextRequest) {
       { type: 'admin' },
       { $set: { items: [], total: 0, updatedAt: new Date() } }
     );
+
+    // Print receipt automatically (fire and forget - don't wait for response)
+    try {
+      const printData = {
+        dailyOrderId,
+        orderDate,
+        customerName: customerName || 'Admin Order',
+        contactNumber: contactNumber || '',
+        orderType: orderType || 'takeaway',
+        deliveryAddress: orderType === 'delivery' ? deliveryAddress : null,
+        items: cart.items || [],
+        subtotal: subtotal,
+        deliveryCharge: finalDeliveryCharge,
+        packingCharge: finalPackingCharge,
+        total: total,
+        paymentMethod: 'cash',
+      };
+
+      // Print asynchronously (don't await - fire and forget)
+      printReceipt(printData).catch((printError) => {
+        console.error('Error printing receipt:', printError);
+        // Don't fail the order if printing fails
+      });
+    } catch (printError) {
+      console.error('Error initiating receipt print:', printError);
+      // Don't fail the order if printing fails
+    }
 
     return NextResponse.json({
       success: true,

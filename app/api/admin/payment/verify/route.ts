@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import crypto from 'crypto';
 import { notifyOrderUpdate } from '@/lib/notifications';
+import { printReceipt } from '@/lib/pos-printer';
 
 // POST - Verify admin payment and create order
 export async function POST(request: NextRequest) {
@@ -162,6 +163,35 @@ export async function POST(request: NextRequest) {
       { type: 'admin' },
       { $set: { items: [], total: 0, updatedAt: new Date() } }
     );
+
+    // Print receipt automatically (fire and forget - don't wait for response)
+    try {
+      const printData = {
+        dailyOrderId,
+        orderDate,
+        customerName: customerName || 'Admin Order',
+        contactNumber: contactNumber || '',
+        orderType: orderType || 'takeaway',
+        deliveryAddress: orderType === 'delivery' ? deliveryAddress : null,
+        items: cart.items || [],
+        subtotal: subtotal,
+        deliveryCharge: finalDeliveryCharge,
+        packingCharge: finalPackingCharge,
+        total: total,
+        paymentId: razorpay_payment_id,
+        razorpayOrderId: razorpay_order_id,
+        paymentMethod: 'online',
+      };
+
+      // Print asynchronously (don't await - fire and forget)
+      printReceipt(printData).catch((printError) => {
+        console.error('Error printing receipt:', printError);
+        // Don't fail the order if printing fails
+      });
+    } catch (printError) {
+      console.error('Error initiating receipt print:', printError);
+      // Don't fail the order if printing fails
+    }
 
     return NextResponse.json({
       success: true,

@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "cloudinary": "^2.8.0",
+    "escpos": "^3.0.0-alpha.6",
+    "escpos-usb": "^3.0.0-alpha.4",
     "html2canvas": "^1.4.1",
     "mongodb": "^7.0.0",
     "multer": "^2.0.2",

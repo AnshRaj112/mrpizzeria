@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import clientPromise from '@/lib/mongodb';
 import { notifyOrderUpdate } from '@/lib/notifications';
+import { printReceipt } from '@/lib/pos-printer';
 
 export async function POST(request: NextRequest) {
   try {
@@ -126,6 +127,35 @@ export async function POST(request: NextRequest) {
             console.error('Error saving customer contact:', contactError);
             // Don't fail the order if contact save fails
           }
+        }
+
+        // Print receipt automatically (fire and forget - don't wait for response)
+        try {
+          const printData = {
+            dailyOrderId,
+            orderDate,
+            customerName: orderData.customerName || 'Customer',
+            contactNumber: orderData.contactNumber || '',
+            orderType: orderData.orderType || 'takeaway',
+            deliveryAddress: orderData.deliveryAddress || null,
+            items: orderData.items || [],
+            subtotal: orderData.subtotal || 0,
+            deliveryCharge: orderData.deliveryCharge || 0,
+            packingCharge: orderData.packingCharge || 0,
+            total: orderData.total || 0,
+            paymentId: razorpay_payment_id,
+            razorpayOrderId: razorpay_order_id,
+            paymentMethod: 'online',
+          };
+
+          // Print asynchronously (don't await - fire and forget)
+          printReceipt(printData).catch((printError) => {
+            console.error('Error printing receipt:', printError);
+            // Don't fail the order if printing fails
+          });
+        } catch (printError) {
+          console.error('Error initiating receipt print:', printError);
+          // Don't fail the order if printing fails
         }
 
       } catch (dbError) {
