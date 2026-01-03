@@ -10,6 +10,11 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 type Category = 'retail' | 'produce';
 type SubCategory = string;
 
+interface PizzaSize {
+  name: string;
+  price: number;
+}
+
 interface FoodItem {
   id: number;
   name: string;
@@ -20,10 +25,16 @@ interface FoodItem {
   quantity?: number;
   lowStockThreshold?: number;
   isVisible?: boolean;
+  // Pizza-specific fields
+  sizes?: PizzaSize[];
+  extraCheesePrice?: number;
 }
 
 interface CartItem extends FoodItem {
   quantity: number;
+  // Pizza-specific cart fields
+  selectedSize?: string;
+  extraCheese?: boolean;
 }
 
 export default function Home() {
@@ -49,6 +60,10 @@ export default function Home() {
   const [upcomingDiscounts, setUpcomingDiscounts] = useState<any[]>([]);
   const [alert, setAlert] = useState<{ message: string; type: 'error' | 'warning' | 'info' | 'success' } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
+  const [pizzaOptionsModal, setPizzaOptionsModal] = useState<{ item: FoodItem; isOpen: boolean }>({ item: null as any, isOpen: false });
+  const [selectedPizzaSize, setSelectedPizzaSize] = useState<string>('');
+  const [extraCheeseSelected, setExtraCheeseSelected] = useState(false);
+  const [pizzaQuickAddMenu, setPizzaQuickAddMenu] = useState<{ item: FoodItem; isOpen: boolean; lastConfig: { size: string; extraCheese: boolean } | null }>({ item: null as any, isOpen: false, lastConfig: null });
 
   // Fetch items function (can be called from anywhere)
   const fetchItems = useCallback(async () => {
@@ -324,19 +339,182 @@ export default function Home() {
     });
   }, [searchQuery, selectedCategory, selectedSubCategory, foodItems]);
 
+  // Check if item is a pizza (has sizes configured)
+  const isPizzaItem = (item: FoodItem): boolean => {
+    return item.category === 'produce' && 
+           item.subCategory.toLowerCase() === 'pizza' && 
+           !!(item.sizes && item.sizes.length > 0);
+  };
+
   // Add item to cart
   const addToCart = (item: FoodItem) => {
+    // If it's a pizza item, check if it's already in cart
+    if (isPizzaItem(item)) {
+      // Find if this pizza is already in cart with any configuration
+      const existingPizzaItems = cart.filter(cartItem => 
+        cartItem.id === item.id && 
+        cartItem.selectedSize // Must have a size to be a valid pizza cart item
+      );
+      
+      if (existingPizzaItems.length > 0) {
+        // Get the last added configuration (most recent)
+        const lastItem = existingPizzaItems[existingPizzaItems.length - 1];
+        const lastConfig = {
+          size: lastItem.selectedSize || '',
+          extraCheese: lastItem.extraCheese || false
+        };
+        
+        // Only show quick menu if we have a valid size
+        if (lastConfig.size) {
+          // Show quick add menu
+          setPizzaQuickAddMenu({ item, isOpen: true, lastConfig });
+          return;
+        }
+      }
+      
+      // If not in cart or no valid config, show the full options modal
+      setSelectedPizzaSize('');
+      setExtraCheeseSelected(false);
+      setPizzaOptionsModal({ item, isOpen: true });
+      return;
+    }
+
+    // For non-pizza items, add directly to cart
     setCart(prevCart => {
-      const existingItem = prevCart.find(cartItem => cartItem.id === item.id);
+      const existingItem = prevCart.find(cartItem => 
+        cartItem.id === item.id && 
+        !cartItem.selectedSize && 
+        !cartItem.extraCheese
+      );
       if (existingItem) {
         return prevCart.map(cartItem =>
-          cartItem.id === item.id
+          cartItem.id === item.id && !cartItem.selectedSize && !cartItem.extraCheese
             ? { ...cartItem, quantity: cartItem.quantity + 1 }
             : cartItem
         );
       }
       return [...prevCart, { ...item, quantity: 1 }];
     });
+  };
+
+  // Quick add pizza with same configuration
+  const quickAddPizza = (withExtraCheese?: boolean) => {
+    if (!pizzaQuickAddMenu.lastConfig || !pizzaQuickAddMenu.item) return;
+    
+    const item = pizzaQuickAddMenu.item;
+    const size = pizzaQuickAddMenu.lastConfig.size;
+    const extraCheese = withExtraCheese !== undefined ? withExtraCheese : pizzaQuickAddMenu.lastConfig.extraCheese;
+    
+    const selectedSizeObj = item.sizes?.find(s => s.name === size);
+    if (!selectedSizeObj) {
+      showAlert('Size not found', 'error');
+      return;
+    }
+
+    // Calculate final price
+    let finalPrice = selectedSizeObj.price;
+    if (extraCheese && item.extraCheesePrice) {
+      finalPrice += item.extraCheesePrice;
+    }
+
+    // Create cart item with pizza options
+    const cartItem: CartItem = {
+      ...item,
+      price: finalPrice,
+      quantity: 1,
+      selectedSize: size,
+      extraCheese: extraCheese,
+    };
+
+    // Check if same pizza with same options already exists in cart
+    setCart(prevCart => {
+      const existingItem = prevCart.find(cartItem => 
+        cartItem.id === item.id && 
+        cartItem.selectedSize === size &&
+        (cartItem.extraCheese || false) === extraCheese
+      );
+      if (existingItem) {
+        return prevCart.map(c =>
+          c.id === item.id && 
+          c.selectedSize === size &&
+          (c.extraCheese || false) === extraCheese
+            ? { ...c, quantity: c.quantity + 1 }
+            : c
+        );
+      }
+      return [...prevCart, cartItem];
+    });
+
+    // Close menu
+    setPizzaQuickAddMenu({ item: null as any, isOpen: false, lastConfig: null });
+  };
+
+  // Open customize modal from quick add menu
+  const openCustomizeModal = () => {
+    if (!pizzaQuickAddMenu.item) return;
+    
+    const item = pizzaQuickAddMenu.item;
+    const lastConfig = pizzaQuickAddMenu.lastConfig;
+    
+    // Pre-fill with last configuration if available
+    setSelectedPizzaSize(lastConfig?.size || '');
+    setExtraCheeseSelected(lastConfig?.extraCheese || false);
+    setPizzaOptionsModal({ item, isOpen: true });
+    setPizzaQuickAddMenu({ item: null as any, isOpen: false, lastConfig: null });
+  };
+
+  // Handle pizza options confirmation
+  const confirmPizzaOptions = () => {
+    if (!selectedPizzaSize) {
+      showAlert('Please select a size', 'warning');
+      return;
+    }
+
+    const item = pizzaOptionsModal.item;
+    const selectedSizeObj = item.sizes?.find(s => s.name === selectedPizzaSize);
+    if (!selectedSizeObj) {
+      showAlert('Invalid size selected', 'error');
+      return;
+    }
+
+    // Calculate final price
+    let finalPrice = selectedSizeObj.price;
+    if (extraCheeseSelected && item.extraCheesePrice) {
+      finalPrice += item.extraCheesePrice;
+    }
+
+    // Create cart item with pizza options
+    const cartItem: CartItem = {
+      ...item,
+      price: finalPrice,
+      quantity: 1,
+      selectedSize: selectedPizzaSize,
+      extraCheese: extraCheeseSelected,
+    };
+
+    // Check if same pizza with same options already exists in cart
+    setCart(prevCart => {
+      const existingItem = prevCart.find(cartItem => 
+        cartItem.id === item.id && 
+        cartItem.selectedSize === selectedPizzaSize &&
+        (cartItem.extraCheese || false) === extraCheeseSelected
+      );
+      if (existingItem) {
+        return prevCart.map(c =>
+          c.id === item.id && 
+          c.selectedSize === selectedPizzaSize &&
+          (c.extraCheese || false) === extraCheeseSelected
+            ? { ...c, quantity: c.quantity + 1 }
+            : c
+        );
+      }
+      return [...prevCart, cartItem];
+    });
+
+    // Close modal and reset
+    setPizzaOptionsModal({ item: null as any, isOpen: false });
+    setSelectedPizzaSize('');
+    setExtraCheeseSelected(false);
   };
 
   // Remove item from cart
@@ -911,6 +1089,17 @@ export default function Home() {
                               <span className="text-sm text-black capitalize">{item.subCategory}</span>
                               <div className="flex flex-col items-end">
                                 {(() => {
+                                  // For pizza items, show "From Rs X" with lowest size price
+                                  if (isPizzaItem(item) && item.sizes && item.sizes.length > 0) {
+                                    const lowestPrice = Math.min(...item.sizes.map(s => s.price));
+                                    return (
+                                      <span className="text-xl font-bold text-sky-500">
+                                        From Rs {lowestPrice.toFixed(2)}
+                                      </span>
+                                    );
+                                  }
+                                  
+                                  // For non-pizza items, show regular price with discount if applicable
                                   const discountInfo = getDiscountedPrice(item);
                                   return (
                                     <>
@@ -928,7 +1117,24 @@ export default function Home() {
                               </div>
                             </div>
                             {(() => {
-                              const cartItem = cart.find(cartItem => cartItem.id === item.id);
+                              // For pizza items, always show "Add to Cart" button to allow adding variants or repeating
+                              if (isPizzaItem(item)) {
+                                return (
+                                  <button
+                                    onClick={() => addToCart(item)}
+                                    className="w-full bg-sky-300 text-white py-2 rounded-lg hover:bg-sky-400 transition-colors font-medium"
+                                  >
+                                    Add to Cart
+                                  </button>
+                                );
+                              }
+
+                              // For non-pizza items, show quantity controls if already in cart
+                              const cartItem = cart.find(cartItem => 
+                                cartItem.id === item.id && 
+                                !cartItem.selectedSize && 
+                                !cartItem.extraCheese
+                              );
                               const quantity = cartItem?.quantity || 0;
                               
                               if (quantity > 0) {
@@ -1027,6 +1233,15 @@ export default function Home() {
                               return null;
                             })()}
                           </div>
+                          {/* Show pizza options if available */}
+                          {item.selectedSize && (
+                            <p className="text-xs text-gray-600 mb-1">
+                              Size: <span className="font-semibold capitalize">{item.selectedSize}</span>
+                              {item.extraCheese && (
+                                <span className="ml-2">• Extra Cheese</span>
+                              )}
+                            </p>
+                          )}
                           {(() => {
                             const discountInfo = getDiscountedPrice(item);
                             return (
@@ -1313,10 +1528,16 @@ export default function Home() {
               <div className="mb-6">
                 <h3 className="font-bold text-black mb-3">Order Items</h3>
                 <div className="space-y-2">
-                  {orderReceipt.items.map((item: CartItem) => (
-                    <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  {orderReceipt.items.map((item: CartItem, index: number) => (
+                    <div key={`${item.id}-${item.selectedSize || ''}-${item.extraCheese || false}-${index}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                       <div className="flex-1">
                         <p className="font-semibold text-black">{item.name}</p>
+                        {item.selectedSize && (
+                          <p className="text-xs text-gray-600">
+                            Size: <span className="font-semibold capitalize">{item.selectedSize}</span>
+                            {item.extraCheese && <span className="ml-2">• Extra Cheese</span>}
+                          </p>
+                        )}
                         <p className="text-xs text-gray-600">Qty: {item.quantity} × Rs {item.price.toFixed(2)}</p>
                       </div>
                       <p className="font-bold text-sky-500">Rs {(item.price * item.quantity).toFixed(2)}</p>
@@ -1428,6 +1649,193 @@ export default function Home() {
           }}
           onCancel={() => setConfirmDialog(null)}
         />
+      )}
+
+      {/* Pizza Quick Add Menu */}
+      {pizzaQuickAddMenu.isOpen && pizzaQuickAddMenu.item && pizzaQuickAddMenu.lastConfig && (
+        <div className="fixed inset-0 bg-gray-300 bg-opacity-30 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            {/* Header */}
+            <div className="p-6 border-b-2 border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-black">{pizzaQuickAddMenu.item.name}</h2>
+                <button
+                  onClick={() => setPizzaQuickAddMenu({ item: null as any, isOpen: false, lastConfig: null })}
+                  className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-black text-xl font-light transition-colors"
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mt-2">
+                Last: {pizzaQuickAddMenu.lastConfig.size} {pizzaQuickAddMenu.lastConfig.extraCheese ? 'with' : 'without'} extra cheese
+              </p>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <div className="space-y-3">
+                {/* Add Same */}
+                <button
+                  onClick={() => quickAddPizza()}
+                  className="w-full px-4 py-3 bg-gradient-to-r from-sky-300 to-cyan-300 text-white rounded-xl hover:from-sky-400 hover:to-cyan-400 transition-all font-bold shadow-lg hover:shadow-xl"
+                >
+                  Add Same ({pizzaQuickAddMenu.lastConfig.size} {pizzaQuickAddMenu.lastConfig.extraCheese ? 'with' : 'without'} extra cheese)
+                </button>
+
+                {/* Toggle Extra Cheese Option */}
+                {pizzaQuickAddMenu.item.extraCheesePrice !== undefined && (
+                  <>
+                    {pizzaQuickAddMenu.lastConfig.extraCheese ? (
+                      <button
+                        onClick={() => quickAddPizza(false)}
+                        className="w-full px-4 py-3 bg-green-300 text-white rounded-xl hover:bg-green-400 transition-all font-semibold"
+                      >
+                        Add {pizzaQuickAddMenu.lastConfig.size} without Extra Cheese
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => quickAddPizza(true)}
+                        className="w-full px-4 py-3 bg-yellow-300 text-white rounded-xl hover:bg-yellow-400 transition-all font-semibold"
+                      >
+                        Add {pizzaQuickAddMenu.lastConfig.size} with Extra Cheese (+Rs {pizzaQuickAddMenu.item.extraCheesePrice?.toFixed(2)})
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* Customize */}
+                <button
+                  onClick={openCustomizeModal}
+                  className="w-full px-4 py-3 bg-gray-200 text-black rounded-xl hover:bg-gray-300 transition-colors font-semibold"
+                >
+                  Customize (Change Size/Options)
+                </button>
+
+                {/* Cancel */}
+                <button
+                  onClick={() => setPizzaQuickAddMenu({ item: null as any, isOpen: false, lastConfig: null })}
+                  className="w-full px-4 py-2 text-gray-600 rounded-xl hover:bg-gray-100 transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pizza Options Modal */}
+      {pizzaOptionsModal.isOpen && pizzaOptionsModal.item && (
+        <div className="fixed inset-0 bg-gray-300 bg-opacity-30 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            {/* Header */}
+            <div className="p-6 border-b-2 border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-black">{pizzaOptionsModal.item.name}</h2>
+                <button
+                  onClick={() => {
+                    setPizzaOptionsModal({ item: null as any, isOpen: false });
+                    setSelectedPizzaSize('');
+                    setExtraCheeseSelected(false);
+                  }}
+                  className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-black text-xl font-light transition-colors"
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              {/* Size Selection */}
+              <div className="mb-6">
+                <label className="block text-base font-bold text-black mb-3">
+                  Select Size <span className="text-red-500">*</span>
+                </label>
+                <div className="space-y-2">
+                  {pizzaOptionsModal.item.sizes?.map((size) => (
+                    <button
+                      key={size.name}
+                      onClick={() => setSelectedPizzaSize(size.name)}
+                      className={`w-full px-4 py-3 rounded-xl border-2 transition-all font-semibold text-sm text-left ${
+                        selectedPizzaSize === size.name
+                          ? 'border-sky-400 bg-sky-200 text-black shadow-md'
+                          : 'border-sky-200 bg-white text-black hover:border-sky-300 hover:bg-sky-50 hover:shadow-sm'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="capitalize">{size.name}</span>
+                        <span className="font-bold text-sky-600">Rs {size.price.toFixed(2)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Extra Cheese Option */}
+              {pizzaOptionsModal.item.extraCheesePrice !== undefined && (
+                <div className="mb-6">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={extraCheeseSelected}
+                      onChange={(e) => setExtraCheeseSelected(e.target.checked)}
+                      className="w-5 h-5 rounded border-2 border-sky-300 text-sky-500 focus:ring-2 focus:ring-sky-400"
+                    />
+                    <div className="flex-1">
+                      <span className="text-base font-semibold text-black">Extra Cheese</span>
+                      <span className="text-sm text-gray-600 ml-2">
+                        (+Rs {pizzaOptionsModal.item.extraCheesePrice?.toFixed(2)})
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {/* Price Summary */}
+              {selectedPizzaSize && (
+                <div className="mb-6 p-4 bg-gray-50 rounded-xl border-2 border-sky-100">
+                  <div className="flex justify-between items-center">
+                    <span className="text-base font-semibold text-black">Total Price:</span>
+                    <span className="text-2xl font-bold text-sky-600">
+                      Rs {(() => {
+                        const selectedSizeObj = pizzaOptionsModal.item.sizes?.find(s => s.name === selectedPizzaSize);
+                        let total = selectedSizeObj?.price || 0;
+                        if (extraCheeseSelected && pizzaOptionsModal.item.extraCheesePrice) {
+                          total += pizzaOptionsModal.item.extraCheesePrice;
+                        }
+                        return total.toFixed(2);
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setPizzaOptionsModal({ item: null as any, isOpen: false });
+                    setSelectedPizzaSize('');
+                    setExtraCheeseSelected(false);
+                  }}
+                  className="flex-1 px-4 py-3 bg-gray-200 text-black rounded-xl hover:bg-gray-300 transition-colors font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmPizzaOptions}
+                  disabled={!selectedPizzaSize}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-sky-300 to-cyan-300 text-white rounded-xl hover:from-sky-400 hover:to-cyan-400 transition-all font-bold shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Add to Cart
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

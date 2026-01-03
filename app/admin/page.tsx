@@ -9,6 +9,11 @@ interface Charges {
   packingCharge: number;
 }
 
+interface PizzaSize {
+  name: string;
+  price: number;
+}
+
 interface FoodItem {
   id: number;
   name: string;
@@ -19,6 +24,8 @@ interface FoodItem {
   quantity?: number;
   lowStockThreshold?: number;
   isVisible?: boolean;
+  sizes?: PizzaSize[];
+  extraCheesePrice?: number;
 }
 
 type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts' | 'reports' | 'cart';
@@ -97,6 +104,8 @@ export default function AdminPage() {
     price: '',
     image: '',
     lowStockThreshold: '10',
+    sizes: [] as PizzaSize[],
+    extraCheesePrice: '',
   });
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url');
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -876,14 +885,67 @@ export default function AdminPage() {
     setMessage(null);
 
     try {
+      // Check if it's a pizza item
+      const isPizza = itemForm.category === 'produce' && itemForm.subCategory.toLowerCase() === 'pizza';
+      
+      // Validate pizza items have at least one size
+      if (isPizza) {
+        if (!itemForm.sizes || itemForm.sizes.length === 0) {
+          setMessage({ type: 'error', text: 'Pizza items must have at least one size configured' });
+          setSaving(false);
+          return;
+        }
+        // Validate all sizes have names and prices
+        for (const size of itemForm.sizes) {
+          if (!size.name.trim() || size.price <= 0) {
+            setMessage({ type: 'error', text: 'All pizza sizes must have a name and a valid price' });
+            setSaving(false);
+            return;
+          }
+        }
+      } else {
+        // Non-pizza items must have a price
+        if (!itemForm.price || parseFloat(itemForm.price) <= 0) {
+          setMessage({ type: 'error', text: 'Price is required and must be greater than 0' });
+          setSaving(false);
+          return;
+        }
+      }
+
       const itemData: any = {
         ...itemForm,
-        price: parseFloat(itemForm.price),
       };
+
+      // Only add price for non-pizza items
+      if (!isPizza) {
+        itemData.price = parseFloat(itemForm.price);
+      } else {
+        // For pizza items, set a default price (lowest size price) or 0
+        const lowestPrice = itemForm.sizes && itemForm.sizes.length > 0
+          ? Math.min(...itemForm.sizes.map(s => s.price))
+          : 0;
+        itemData.price = lowestPrice;
+      }
 
       // Add low stock threshold for retail items
       if (itemForm.category === 'retail') {
         itemData.lowStockThreshold = parseInt(itemForm.lowStockThreshold) || 10;
+      }
+
+      // Add pizza-specific fields if it's a pizza item
+      if (isPizza) {
+        // Include sizes if any are configured
+        if (itemForm.sizes && itemForm.sizes.length > 0) {
+          itemData.sizes = itemForm.sizes;
+        }
+        // Include extra cheese price if provided
+        if (itemForm.extraCheesePrice && itemForm.extraCheesePrice.trim() !== '') {
+          itemData.extraCheesePrice = parseFloat(itemForm.extraCheesePrice);
+        }
+      } else {
+        // Remove pizza fields for non-pizza items
+        delete itemData.sizes;
+        delete itemData.extraCheesePrice;
       }
 
       const url = editingItem ? '/api/items' : '/api/items';
@@ -926,6 +988,8 @@ export default function AdminPage() {
       price: item.price.toString(),
       image: item.image,
       lowStockThreshold: item.lowStockThreshold?.toString() || '10',
+      sizes: item.sizes || [],
+      extraCheesePrice: item.extraCheesePrice?.toString() || '',
     });
     setImagePreview(item.image);
     setImageMode('url');
@@ -965,10 +1029,38 @@ export default function AdminPage() {
       price: '',
       image: '',
       lowStockThreshold: '10',
+      sizes: [],
+      extraCheesePrice: '',
     });
     setEditingItem(null);
     setImagePreview('');
     setImageMode('url');
+  };
+
+  // Pizza size management functions
+  const addPizzaSize = () => {
+    setItemForm(prev => ({
+      ...prev,
+      sizes: [...prev.sizes, { name: '', price: 0 }]
+    }));
+  };
+
+  const removePizzaSize = (index: number) => {
+    setItemForm(prev => ({
+      ...prev,
+      sizes: prev.sizes.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updatePizzaSize = (index: number, field: 'name' | 'price', value: string | number) => {
+    setItemForm(prev => ({
+      ...prev,
+      sizes: prev.sizes.map((size, i) => 
+        i === index 
+          ? { ...size, [field]: field === 'price' ? (typeof value === 'number' ? value : parseFloat(value.toString()) || 0) : value }
+          : size
+      )
+    }));
   };
 
   // Get unique subcategories for each category
@@ -1506,25 +1598,28 @@ export default function AdminPage() {
                       </p>
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-semibold text-black mb-2">
-                        Price (Rs) <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-black font-semibold">
-                          Rs
-                        </span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={itemForm.price}
-                          onChange={(e) => handleItemFormChange('price', e.target.value)}
-                          className="w-full pl-12 pr-4 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black"
-                          required
-                        />
+                    {/* Price field - hidden for pizza items */}
+                    {!(itemForm.category === 'produce' && itemForm.subCategory.toLowerCase() === 'pizza') && (
+                      <div>
+                        <label className="block text-sm font-semibold text-black mb-2">
+                          Price (Rs) <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-black font-semibold">
+                            Rs
+                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={itemForm.price}
+                            onChange={(e) => handleItemFormChange('price', e.target.value)}
+                            className="w-full pl-12 pr-4 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black"
+                            required
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {itemForm.category === 'retail' && (
                       <div>
@@ -1543,6 +1638,96 @@ export default function AdminPage() {
                           Alert when stock drops below this number
                         </p>
                       </div>
+                    )}
+
+                    {/* Pizza Configuration - Only show for produce items with subcategory "pizza" */}
+                    {itemForm.category === 'produce' && itemForm.subCategory.toLowerCase() === 'pizza' && (
+                      <>
+                        <div className="md:col-span-2 p-4 bg-yellow-50 border-2 border-yellow-200 rounded-lg">
+                          <h3 className="text-lg font-bold text-black mb-3">🍕 Pizza Configuration</h3>
+                          
+                          {/* Pizza Sizes */}
+                          <div className="mb-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="block text-sm font-semibold text-black">
+                                Pizza Sizes
+                              </label>
+                              <button
+                                type="button"
+                                onClick={addPizzaSize}
+                                className="px-3 py-1 bg-green-300 text-white rounded-lg hover:bg-green-400 transition-colors text-sm font-semibold"
+                              >
+                                + Add Size
+                              </button>
+                            </div>
+                            {itemForm.sizes.length === 0 ? (
+                              <p className="text-xs text-gray-600 italic">No sizes configured. Add sizes to enable size selection for customers.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {itemForm.sizes.map((size, index) => (
+                                  <div key={index} className="flex gap-2 items-center p-2 bg-white rounded-lg border border-yellow-200">
+                                    <input
+                                      type="text"
+                                      value={size.name}
+                                      onChange={(e) => updatePizzaSize(index, 'name', e.target.value)}
+                                      placeholder="Size name (e.g., Small, Medium, Large)"
+                                      className="flex-1 px-3 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black text-sm"
+                                    />
+                                    <div className="relative w-32">
+                                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-black font-semibold text-sm">
+                                        Rs
+                                      </span>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={size.price}
+                                        onChange={(e) => updatePizzaSize(index, 'price', parseFloat(e.target.value) || 0)}
+                                        placeholder="Price"
+                                        className="w-full pl-10 pr-3 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black text-sm"
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => removePizzaSize(index)}
+                                      className="px-3 py-2 bg-red-300 text-white rounded-lg hover:bg-red-400 transition-colors text-sm font-semibold"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <p className="text-xs text-gray-600 mt-2">
+                              Configure different sizes (Small, Medium, Large, etc.) with their prices. Customers will select a size when adding to cart.
+                            </p>
+                          </div>
+
+                          {/* Extra Cheese Price */}
+                          <div>
+                            <label className="block text-sm font-semibold text-black mb-2">
+                              Extra Cheese Price (Rs)
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-black font-semibold">
+                                Rs
+                              </span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={itemForm.extraCheesePrice}
+                                onChange={(e) => handleItemFormChange('extraCheesePrice', e.target.value)}
+                                placeholder="0.00"
+                                className="w-full pl-12 pr-4 py-2 rounded-lg border-2 border-sky-200 focus:border-sky-400 focus:outline-none bg-white text-black"
+                              />
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              Set the price for extra cheese option. Leave empty to disable extra cheese option.
+                            </p>
+                          </div>
+                        </div>
+                      </>
                     )}
 
                     <div className="md:col-span-2">
@@ -1900,7 +2085,15 @@ export default function AdminPage() {
                           <div className="space-y-1">
                             {order.items?.map((item: any, idx: number) => (
                               <div key={idx} className="flex justify-between text-sm text-black bg-white p-2 rounded">
-                                <span>{item.name} × {item.quantity}</span>
+                                <div className="flex-1">
+                                  <span>{item.name} × {item.quantity}</span>
+                                  {item.selectedSize && (
+                                    <span className="ml-2 text-xs text-gray-600">
+                                      ({item.selectedSize.charAt(0).toUpperCase() + item.selectedSize.slice(1)}
+                                      {item.extraCheese ? ' with Extra Cheese' : ''})
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="font-semibold">Rs {(item.price * item.quantity).toFixed(2)}</span>
                               </div>
                             ))}
@@ -2054,7 +2247,15 @@ export default function AdminPage() {
                           <div className="space-y-1">
                             {order.items?.map((item: any, idx: number) => (
                               <div key={idx} className="flex justify-between text-sm text-black bg-white p-2 rounded">
-                                <span>{item.name} × {item.quantity}</span>
+                                <div className="flex-1">
+                                  <span>{item.name} × {item.quantity}</span>
+                                  {item.selectedSize && (
+                                    <span className="ml-2 text-xs text-gray-600">
+                                      ({item.selectedSize.charAt(0).toUpperCase() + item.selectedSize.slice(1)}
+                                      {item.extraCheese ? ' with Extra Cheese' : ''})
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="font-semibold">Rs {(item.price * item.quantity).toFixed(2)}</span>
                               </div>
                             ))}

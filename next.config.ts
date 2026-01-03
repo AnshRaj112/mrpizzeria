@@ -51,6 +51,10 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: '**.wikipedia.org',
       },
+      {
+        protocol: 'https',
+        hostname: 'media-assets.swiggy.com',
+      },
     ],
     // Allow unoptimized images as fallback for any other domains
     unoptimized: false,

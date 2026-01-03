@@ -31,10 +31,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, category, subCategory, price, image } = body;
+    const { name, category, subCategory, price, image, sizes, extraCheesePrice } = body;
 
-    // Validation
-    if (!name || !category || !subCategory || typeof price !== 'number' || !image) {
+    // Basic validation
+    if (!name || !category || !subCategory || !image) {
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -48,9 +48,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (price < 0) {
+    // Check if it's a pizza item
+    const isPizza = category === 'produce' && subCategory.toLowerCase() === 'pizza';
+
+    // Validate pizza items
+    if (isPizza) {
+      if (!sizes || !Array.isArray(sizes) || sizes.length === 0) {
+        return NextResponse.json(
+          { error: 'Pizza items must have at least one size configured' },
+          { status: 400 }
+        );
+      }
+      for (const size of sizes) {
+        if (!size.name || typeof size.price !== 'number' || size.price <= 0) {
+          return NextResponse.json(
+            { error: 'Invalid size configuration. Each size must have a name and a positive price.' },
+            { status: 400 }
+          );
+        }
+      }
+    } else {
+      // Non-pizza items must have a price
+      if (typeof price !== 'number' || price <= 0) {
+        return NextResponse.json(
+          { error: 'Price is required and must be greater than 0' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate extra cheese price if provided
+    if (extraCheesePrice !== undefined && (typeof extraCheesePrice !== 'number' || extraCheesePrice < 0)) {
       return NextResponse.json(
-        { error: 'Price cannot be negative' },
+        { error: 'Extra cheese price must be a non-negative number' },
         { status: 400 }
       );
     }
@@ -62,12 +92,20 @@ export async function POST(request: NextRequest) {
     const lastItem = await db.collection('items').findOne({}, { sort: { id: -1 } });
     const newId = lastItem ? lastItem.id + 1 : 1;
 
+    // Calculate price for pizza items (lowest size price) or use provided price
+    let itemPrice = 0;
+    if (isPizza && sizes && sizes.length > 0) {
+      itemPrice = Math.min(...sizes.map((s: any) => s.price));
+    } else {
+      itemPrice = parseFloat(price.toFixed(2));
+    }
+
     const newItem: any = {
       id: newId,
       name: name.trim(),
       category,
       subCategory: subCategory.trim(),
-      price: parseFloat(price.toFixed(2)),
+      price: itemPrice,
       image: image.trim(),
       isVisible: true, // Default to visible
       createdAt: new Date(),
@@ -78,6 +116,18 @@ export async function POST(request: NextRequest) {
     if (category === 'retail') {
       newItem.quantity = 0;
       newItem.lowStockThreshold = 10; // Default low stock threshold
+    }
+
+    // Add pizza-specific fields if provided
+    if (sizes && Array.isArray(sizes) && sizes.length > 0) {
+      newItem.sizes = sizes.map((s: any) => ({
+        name: s.name.trim(),
+        price: parseFloat(s.price.toFixed(2))
+      }));
+    }
+
+    if (extraCheesePrice !== undefined) {
+      newItem.extraCheesePrice = parseFloat(extraCheesePrice.toFixed(2));
     }
 
     await db.collection('items').insertOne(newItem);
@@ -96,7 +146,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, name, category, subCategory, price, image, quantity, lowStockThreshold, isVisible } = body;
+    const { id, name, category, subCategory, price, image, quantity, lowStockThreshold, isVisible, sizes, extraCheesePrice } = body;
 
     if (!id || typeof id !== 'number') {
       return NextResponse.json(
@@ -117,7 +167,9 @@ export async function PUT(request: NextRequest) {
       price === undefined &&
       image === undefined &&
       quantity === undefined &&
-      lowStockThreshold === undefined;
+      lowStockThreshold === undefined &&
+      sizes === undefined &&
+      extraCheesePrice === undefined;
 
     if (onlyVisibilityUpdate) {
       const result = await db.collection('items').updateOne(
@@ -150,6 +202,32 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // Validate pizza sizes if provided
+    if (sizes !== undefined) {
+      if (!Array.isArray(sizes)) {
+        return NextResponse.json(
+          { error: 'Sizes must be an array' },
+          { status: 400 }
+        );
+      }
+      for (const size of sizes) {
+        if (!size.name || typeof size.price !== 'number' || size.price < 0) {
+          return NextResponse.json(
+            { error: 'Invalid size configuration. Each size must have a name and non-negative price.' },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
+    // Validate extra cheese price if provided
+    if (extraCheesePrice !== undefined && (typeof extraCheesePrice !== 'number' || extraCheesePrice < 0)) {
+      return NextResponse.json(
+        { error: 'Extra cheese price must be a non-negative number' },
+        { status: 400 }
+      );
+    }
+
     const updateData: any = {
       updatedAt: new Date(),
     };
@@ -171,9 +249,38 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    // Pizza-specific fields
+    const unsetFields: any = {};
+    if (sizes !== undefined) {
+      if (sizes.length === 0) {
+        // Remove sizes field if empty array
+        unsetFields.sizes = '';
+      } else {
+        updateData.sizes = sizes.map((s: any) => ({
+          name: s.name.trim(),
+          price: parseFloat(s.price.toFixed(2))
+        }));
+      }
+    }
+
+    if (extraCheesePrice !== undefined) {
+      if (extraCheesePrice === null || extraCheesePrice === '') {
+        // Remove extraCheesePrice field if null or empty
+        unsetFields.extraCheesePrice = '';
+      } else {
+        updateData.extraCheesePrice = parseFloat(extraCheesePrice.toFixed(2));
+      }
+    }
+
+    // Build update operation
+    const updateOperation: any = { $set: updateData };
+    if (Object.keys(unsetFields).length > 0) {
+      updateOperation.$unset = unsetFields;
+    }
+
     const result = await db.collection('items').updateOne(
       { id },
-      { $set: updateData }
+      updateOperation
     );
 
     if (result.matchedCount === 0) {

@@ -14,12 +14,23 @@
  */
 
 import escpos from 'escpos';
-import escposUSB from 'escpos-usb';
-import * as usb from 'usb';
 import * as net from 'net';
 
-// Configure escpos to use USB
-escpos.USB = escposUSB;
+// Try to import USB modules, but make them optional
+let escposUSB: any = null;
+let usb: any = null;
+let usbAvailable = false;
+
+try {
+  escposUSB = require('escpos-usb');
+  usb = require('usb');
+  // Configure escpos to use USB only if available
+  escpos.USB = escposUSB;
+  usbAvailable = true;
+} catch (error) {
+  console.warn('USB printer support not available. USB modules not loaded:', error);
+  usbAvailable = false;
+}
 
 interface OrderData {
   dailyOrderId: number;
@@ -45,7 +56,11 @@ interface OrderData {
 /**
  * Find and connect to the first available USB printer
  */
-function findUSBPrinter(): usb.Device | null {
+function findUSBPrinter(): any | null {
+  if (!usbAvailable || !usb) {
+    return null;
+  }
+  
   try {
     const devices = usb.getDeviceList();
     // Filter for common POS printer vendor IDs
@@ -78,11 +93,10 @@ function findUSBPrinter(): usb.Device | null {
 export async function printReceipt(orderData: OrderData): Promise<{ success: boolean; message: string }> {
   return new Promise((resolve) => {
     try {
-      // Try to find USB printer
+      // Try to find USB printer (only if USB is available)
       const device = findUSBPrinter();
       
       if (!device) {
-        console.warn('No USB printer found. Attempting network printer or using default...');
         // Fallback: Try network printer if configured
         const printerIP = process.env.POS_PRINTER_IP;
         const printerPort = process.env.POS_PRINTER_PORT || '9100';
@@ -96,9 +110,11 @@ export async function printReceipt(orderData: OrderData): Promise<{ success: boo
             });
         }
         
+        // No printer available - this is okay, just log and return success
+        console.log('No printer available. Receipt not printed. Order saved successfully.');
         resolve({ 
-          success: false, 
-          message: 'No printer found. Please connect a USB printer or configure POS_PRINTER_IP in environment variables.' 
+          success: true, 
+          message: 'Order saved successfully. No printer configured.' 
         });
         return;
       }
@@ -114,9 +130,10 @@ export async function printReceipt(orderData: OrderData): Promise<{ success: boo
       
     } catch (error: any) {
       console.error('Error printing receipt:', error);
+      // Don't fail the order if printing fails - just log the error
       resolve({ 
-        success: false, 
-        message: 'Print error: ' + (error.message || 'Unknown error') 
+        success: true, 
+        message: 'Order saved successfully. Print error: ' + (error.message || 'Unknown error') 
       });
     }
   });
