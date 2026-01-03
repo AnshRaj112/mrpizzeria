@@ -63,6 +63,10 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'static.toiimg.com',
       },
+      {
+        protocol: 'https',
+        hostname: 'instamart-media-assets.swiggy.com',
+      },
     ],
     // Allow unoptimized images as fallback for any other domains
     unoptimized: false,

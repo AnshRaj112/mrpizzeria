@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, category, subCategory, price, image, sizes, extraCheesePrice } = body;
+    const { name, category, subCategory, price, image, sizes, extraCheesePrice, lowStockThreshold } = body;
 
     // Basic validation
     if (!name || !category || !subCategory || !image) {
@@ -115,7 +115,12 @@ export async function POST(request: NextRequest) {
     // Add quantity fields for retail items
     if (category === 'retail') {
       newItem.quantity = 0;
-      newItem.lowStockThreshold = 10; // Default low stock threshold
+      // Use provided threshold or default to 10, but allow 0 as valid value
+      if (lowStockThreshold !== undefined && typeof lowStockThreshold === 'number' && lowStockThreshold >= 0) {
+        newItem.lowStockThreshold = Math.floor(lowStockThreshold);
+      } else {
+        newItem.lowStockThreshold = 10; // Default low stock threshold
+      }
     }
 
     // Add pizza-specific fields if provided

@@ -929,7 +929,8 @@ export default function AdminPage() {
 
       // Add low stock threshold for retail items
       if (itemForm.category === 'retail') {
-        itemData.lowStockThreshold = parseInt(itemForm.lowStockThreshold) || 10;
+        const threshold = parseInt(itemForm.lowStockThreshold);
+        itemData.lowStockThreshold = isNaN(threshold) ? 10 : threshold;
       }
 
       // Add pizza-specific fields if it's a pizza item
