@@ -71,6 +71,10 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'www.elloras.in',
       },
+      {
+        protocol: 'https',
+        hostname: 'www.tablefortwoblog.com',
+      },
     ],
     // Allow unoptimized images as fallback for any other domains
     unoptimized: false,
