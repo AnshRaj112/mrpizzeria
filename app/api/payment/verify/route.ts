@@ -91,44 +91,6 @@ export async function POST(request: NextRequest) {
           // Don't fail the order if notification fails
         }
 
-        // Save customer contact number for bulk messaging
-        if (orderData.contactNumber) {
-          try {
-            // Check if contact already exists
-            const existingContact = await db.collection('customers').findOne({
-              contactNumber: orderData.contactNumber,
-            });
-
-            if (!existingContact) {
-              // Save new customer contact
-              await db.collection('customers').insertOne({
-                contactNumber: orderData.contactNumber,
-                customerName: orderData.customerName || '',
-                firstOrderDate: new Date(),
-                lastOrderDate: new Date(),
-                totalOrders: 1,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              });
-            } else {
-              // Update existing customer
-              await db.collection('customers').updateOne(
-                { contactNumber: orderData.contactNumber },
-                {
-                  $set: {
-                    lastOrderDate: new Date(),
-                    updatedAt: new Date(),
-                  },
-                  $inc: { totalOrders: 1 },
-                }
-              );
-            }
-          } catch (contactError) {
-            console.error('Error saving customer contact:', contactError);
-            // Don't fail the order if contact save fails
-          }
-        }
-
         // Print receipt automatically (fire and forget - don't wait for response)
         try {
           const printData = {

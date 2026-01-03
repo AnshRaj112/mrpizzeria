@@ -55,6 +55,14 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'media-assets.swiggy.com',
       },
+      {
+        protocol: 'https',
+        hostname: 'safrescobaldistatic.blob.core.windows.net',
+      },
+      {
+        protocol: 'https',
+        hostname: 'static.toiimg.com',
+      },
     ],
     // Allow unoptimized images as fallback for any other domains
     unoptimized: false,
