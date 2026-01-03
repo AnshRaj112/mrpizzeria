@@ -67,6 +67,10 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'instamart-media-assets.swiggy.com',
       },
+      {
+        protocol: 'https',
+        hostname: 'www.elloras.in',
+      },
     ],
     // Allow unoptimized images as fallback for any other domains
     unoptimized: false,
