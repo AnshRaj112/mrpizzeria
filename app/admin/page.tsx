@@ -48,7 +48,7 @@ export default function AdminPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void; type?: 'danger' | 'warning' | 'info' } | null>(null);
   const [lowStockNotifications, setLowStockNotifications] = useState<any[]>([]);
-  const [editingQuantity, setEditingQuantity] = useState<{ itemId: number; quantity: number } | null>(null);
+  const [editingQuantity, setEditingQuantity] = useState<{ itemId: number; quantity: number; isAdditive: boolean } | null>(null);
   const [reportDate, setReportDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [reportData, setReportData] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
@@ -321,14 +321,14 @@ export default function AdminPage() {
     }
   };
 
-  const updateQuantity = async (itemId: number, quantity: number) => {
+  const updateQuantity = async (itemId: number, quantity: number, isAdditive: boolean = false) => {
     try {
       const response = await fetch('/api/items/update-quantity', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ itemId, quantity }),
+        body: JSON.stringify({ itemId, quantity, isAdditive }),
       });
 
       if (response.ok) {
@@ -2104,27 +2104,35 @@ export default function AdminPage() {
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-xs font-semibold text-gray-700">Stock:</span>
                               {editingQuantity?.itemId === item.id ? (
-                                <div className="flex items-center gap-1">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    value={editingQuantity.quantity}
-                                    onChange={(e) => setEditingQuantity({ itemId: item.id, quantity: parseInt(e.target.value) || 0 })}
-                                    className="w-16 px-2 py-1 text-sm border border-gray-300 rounded text-black"
-                                    autoFocus
-                                  />
-                                  <button
-                                    onClick={() => updateQuantity(item.id, editingQuantity.quantity)}
-                                    className="px-2 py-1 bg-green-200 text-green-800 rounded text-xs font-semibold hover:bg-green-300"
-                                  >
-                                    ✓
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingQuantity(null)}
-                                    className="px-2 py-1 bg-gray-200 text-gray-800 rounded text-xs font-semibold hover:bg-gray-300"
-                                  >
-                                    ✕
-                                  </button>
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={editingQuantity.quantity}
+                                      onChange={(e) => setEditingQuantity({ ...editingQuantity, quantity: parseInt(e.target.value) || 0 })}
+                                      className="w-16 px-2 py-1 text-sm border border-gray-300 rounded text-black"
+                                      placeholder={editingQuantity.isAdditive ? "Add amount" : "New total"}
+                                      autoFocus
+                                    />
+                                    <button
+                                      onClick={() => updateQuantity(item.id, editingQuantity.quantity, editingQuantity.isAdditive)}
+                                      className="px-2 py-1 bg-green-200 text-green-800 rounded text-xs font-semibold hover:bg-green-300"
+                                    >
+                                      ✓
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingQuantity(null)}
+                                      className="px-2 py-1 bg-gray-200 text-gray-800 rounded text-xs font-semibold hover:bg-gray-300"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                  <span className="text-xs text-gray-600">
+                                    {editingQuantity.isAdditive 
+                                      ? `Adding to current stock (${item.quantity ?? 0})` 
+                                      : `Setting total stock`}
+                                  </span>
                                 </div>
                               ) : (
                                 <div className="flex items-center gap-2">
@@ -2132,10 +2140,17 @@ export default function AdminPage() {
                                     {item.quantity ?? 0}
                                   </span>
                                   <button
-                                    onClick={() => setEditingQuantity({ itemId: item.id, quantity: item.quantity ?? 0 })}
+                                    onClick={() => setEditingQuantity({ itemId: item.id, quantity: item.quantity ?? 0, isAdditive: false })}
                                     className="px-2 py-1 bg-blue-200 text-blue-800 rounded text-xs font-semibold hover:bg-blue-300"
                                   >
-                                    Edit
+                                    Set Stock
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingQuantity({ itemId: item.id, quantity: 0, isAdditive: true })}
+                                    className="px-2 py-1 bg-green-200 text-green-800 rounded text-xs font-semibold hover:bg-green-300"
+                                    title="Add to stock"
+                                  >
+                                    Add Stock
                                   </button>
                                 </div>
                               )}
@@ -3443,7 +3458,7 @@ export default function AdminPage() {
                       // Update order based on new positions
                       const itemOrders = sortedItems.map((item, idx) => ({
                         id: item.id,
-                        displayOrder: idx * 10 // Use increments of 10 for flexibility
+                        displayOrder: idx // Sequential ordering from 0
                       }));
 
                       const [category, subCategory] = subcategoryKey.split('-');

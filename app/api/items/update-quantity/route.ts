@@ -5,7 +5,7 @@ import clientPromise from '@/lib/mongodb';
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { itemId, quantity } = body;
+    const { itemId, quantity, isAdditive } = body;
 
     if (!itemId || quantity === undefined) {
       return NextResponse.json(
@@ -40,9 +40,19 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const newQuantity = Math.floor(quantity);
     const lowStockThreshold = item.lowStockThreshold || 10;
     const oldQuantity = item.quantity || 0;
+    
+    // Calculate new quantity based on mode
+    let newQuantity: number;
+    if (isAdditive) {
+      // Additive mode: add the provided quantity to current quantity
+      newQuantity = Math.max(0, Math.floor(oldQuantity + quantity));
+    } else {
+      // Absolute mode: set to the provided quantity
+      newQuantity = Math.floor(quantity);
+    }
+    
     const quantityChange = newQuantity - oldQuantity;
     const today = new Date().toISOString().split('T')[0];
 

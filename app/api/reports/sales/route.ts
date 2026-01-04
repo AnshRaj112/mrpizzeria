@@ -13,12 +13,11 @@ export async function GET(request: NextRequest) {
     // Get all items
     const items = await db.collection('items').find({}).toArray();
 
-    // Get all delivered orders for the date
+    // Get all orders for the date (count all orders since stock decreases immediately on order placement)
     const orders = await db
       .collection('orders')
       .find({
         orderDate: date,
-        status: 'delivered',
       })
       .toArray();
 

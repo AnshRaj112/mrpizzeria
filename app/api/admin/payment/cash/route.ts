@@ -126,6 +126,25 @@ export async function POST(request: NextRequest) {
     const insertResult = await db.collection('orders').insertOne(orderData);
     const orderId = insertResult.insertedId.toString();
 
+    // Decrease stock for retail items
+    try {
+      if (cart.items && Array.isArray(cart.items)) {
+        for (const orderItem of cart.items) {
+          const item = await db.collection('items').findOne({ id: orderItem.id });
+          if (item && item.category === 'retail' && item.quantity !== undefined) {
+            const newQuantity = Math.max(0, (item.quantity || 0) - (orderItem.quantity || 0));
+            await db.collection('items').updateOne(
+              { id: orderItem.id },
+              { $set: { quantity: newQuantity, updatedAt: new Date() } }
+            );
+          }
+        }
+      }
+    } catch (stockError) {
+      console.error('Error decreasing stock:', stockError);
+      // Don't fail the order if stock decrease fails
+    }
+
     // Notify admin about new order
     try {
       const notificationData = {
