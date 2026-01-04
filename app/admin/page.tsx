@@ -27,6 +27,7 @@ interface FoodItem {
   isVisible?: boolean;
   sizes?: PizzaSize[];
   extraCheesePrice?: number;
+  displayOrder?: number;
 }
 
 type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts' | 'reports' | 'cart' | 'ordering';

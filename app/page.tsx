@@ -28,6 +28,7 @@ interface FoodItem {
   // Pizza-specific fields
   sizes?: PizzaSize[];
   extraCheesePrice?: number;
+  displayOrder?: number;
 }
 
 interface CartItem extends FoodItem {
