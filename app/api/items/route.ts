@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       query.isVisible = { $ne: false }; // Include items where isVisible is true or undefined
     }
     
-    const items = await db.collection('items').find(query).toArray();
+    const items = await db.collection('items').find(query).sort({ displayOrder: 1, id: 1 }).toArray();
     
     return NextResponse.json(items);
   } catch (error) {
@@ -100,6 +100,15 @@ export async function POST(request: NextRequest) {
       itemPrice = parseFloat(price.toFixed(2));
     }
 
+    // Get max displayOrder for this subcategory to set default order
+    const maxOrderItem = await db.collection('items').findOne(
+      { category, subCategory: subCategory.trim() },
+      { sort: { displayOrder: -1 } }
+    );
+    const defaultDisplayOrder = maxOrderItem?.displayOrder !== undefined 
+      ? (maxOrderItem.displayOrder + 1) 
+      : newId;
+
     const newItem: any = {
       id: newId,
       name: name.trim(),
@@ -108,6 +117,7 @@ export async function POST(request: NextRequest) {
       price: itemPrice,
       image: image.trim(),
       isVisible: true, // Default to visible
+      displayOrder: defaultDisplayOrder,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

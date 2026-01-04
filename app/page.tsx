@@ -815,7 +815,7 @@ export default function Home() {
     return Array.from(new Set(subcats)).sort();
   };
 
-  // Group items by category and subcategory for section display
+  // Group items by category and subcategory for section display, sorted by displayOrder
   const groupedItems = useMemo(() => {
     const groups: Record<Category, Record<string, FoodItem[]>> = {
       produce: {},
@@ -829,10 +829,36 @@ export default function Home() {
       groups[item.category][item.subCategory].push(item);
     });
 
+    // Sort items within each subcategory by displayOrder
+    Object.keys(groups.produce).forEach(subCat => {
+      groups.produce[subCat].sort((a, b) => {
+        const orderA = (a as any).displayOrder ?? a.id ?? 0;
+        const orderB = (b as any).displayOrder ?? b.id ?? 0;
+        return orderA - orderB;
+      });
+    });
+    Object.keys(groups.retail).forEach(subCat => {
+      groups.retail[subCat].sort((a, b) => {
+        const orderA = (a as any).displayOrder ?? a.id ?? 0;
+        const orderB = (b as any).displayOrder ?? b.id ?? 0;
+        return orderA - orderB;
+      });
+    });
+
     return groups;
   }, [filteredItems]);
 
-  // Dynamic section order: Produce first, then Retail, with subcategories sorted
+  // Dynamic section order: Respect admin-defined ordering
+  const [subcategoryOrder, setSubcategoryOrder] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    // Fetch subcategory order
+    fetch('/api/subcategories/order')
+      .then(res => res.json())
+      .then(data => setSubcategoryOrder(data.order || {}))
+      .catch(err => console.error('Error fetching subcategory order:', err));
+  }, []);
+
   const sectionOrder = useMemo(() => {
     const produceSubcats = foodItems
       .filter((item) => item.category === 'produce')
@@ -841,31 +867,42 @@ export default function Home() {
       .filter((item) => item.category === 'retail')
       .map((item) => item.subCategory);
 
-    const uniqueProduce = Array.from(new Set(produceSubcats)).sort();
-    const uniqueRetail = Array.from(new Set(retailSubcats)).sort();
+    const uniqueProduce = Array.from(new Set(produceSubcats));
+    const uniqueRetail = Array.from(new Set(retailSubcats));
 
-    const order: Array<{ category: Category; subCategory: SubCategory; label: string }> = [];
+    const order: Array<{ category: Category; subCategory: SubCategory; label: string; order: number }> = [];
 
-    // Add produce sections first
+    // Add produce sections with ordering
     uniqueProduce.forEach((subCat) => {
+      const key = `produce-${subCat}`;
       order.push({
         category: 'produce',
         subCategory: subCat,
         label: subCat.charAt(0).toUpperCase() + subCat.slice(1),
+        order: subcategoryOrder[key] ?? 999999,
       });
     });
 
-    // Add retail sections second
+    // Add retail sections with ordering
     uniqueRetail.forEach((subCat) => {
+      const key = `retail-${subCat}`;
       order.push({
         category: 'retail',
         subCategory: subCat,
         label: subCat.charAt(0).toUpperCase() + subCat.slice(1),
+        order: subcategoryOrder[key] ?? 999999,
       });
     });
 
-    return order;
-  }, [foodItems]);
+    // Sort by order, then by category (produce first), then alphabetically
+    return order.sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order;
+      if (a.category !== b.category) {
+        return a.category === 'produce' ? -1 : 1;
+      }
+      return a.subCategory.localeCompare(b.subCategory);
+    });
+  }, [foodItems, subcategoryOrder]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 to-cyan-50">
@@ -873,7 +910,16 @@ export default function Home() {
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <h1 className="text-3xl font-bold text-sky-400">🍕 Mr. Pizzeria</h1>
+            <div className="relative h-12 w-auto">
+              <Image
+                src="/umesh.jpeg"
+                alt="New Umesh Sweets & Confectionary"
+                width={200}
+                height={48}
+                className="h-12 w-auto object-contain"
+                priority
+              />
+            </div>
             <button
               onClick={() => setShowCart(true)}
               className="relative flex items-center gap-2 bg-sky-300 text-white px-6 py-2 rounded-full hover:bg-sky-400 transition-colors"
@@ -1450,7 +1496,15 @@ export default function Home() {
             <div className="p-6 border-b-2 border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-3xl font-bold text-black">🍕 Mr. Pizzeria</h2>
+                  <div className="relative h-10 w-auto mb-2">
+                    <Image
+                      src="/umesh.jpeg"
+                      alt="New Umesh Sweets & Confectionary"
+                      width={180}
+                      height={40}
+                      className="h-10 w-auto object-contain"
+                    />
+                  </div>
                   <p className="text-sm text-gray-600">Order Receipt</p>
                 </div>
                 <button

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { useAuth } from '@/lib/useAuth';
 
 interface Charges {
   deliveryCharge: number;
@@ -28,9 +29,10 @@ interface FoodItem {
   extraCheesePrice?: number;
 }
 
-type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts' | 'reports' | 'cart';
+type Tab = 'charges' | 'items' | 'orders' | 'past-orders' | 'discounts' | 'reports' | 'cart' | 'ordering';
 
 export default function AdminPage() {
+  const { user, loading: authLoading, logout } = useAuth('admin');
   const [activeTab, setActiveTab] = useState<Tab>('charges');
   const [charges, setCharges] = useState<Charges>({
     deliveryCharge: 5.00,
@@ -126,6 +128,13 @@ export default function AdminPage() {
     endDate: '',
     isActive: true,
   });
+
+  // Ordering state
+  const [subcategoryOrder, setSubcategoryOrder] = useState<Record<string, number>>({});
+  const [orderingLoading, setOrderingLoading] = useState(false);
+  const [draggedSubcategory, setDraggedSubcategory] = useState<string | null>(null);
+  const [draggedItem, setDraggedItem] = useState<{ itemId: number; subcategoryKey: string } | null>(null);
+  const [subcategoryList, setSubcategoryList] = useState<Array<{ category: string; subCategory: string; key: string }>>([]);
 
   // Fetch data on component mount
   useEffect(() => {
@@ -1104,6 +1113,138 @@ export default function AdminPage() {
     }
   };
 
+  const fetchSubcategoryOrder = async () => {
+    try {
+      const response = await fetch('/api/subcategories/order');
+      if (response.ok) {
+        const data = await response.json();
+        setSubcategoryOrder(data.order || {});
+        
+        // Build unique subcategory list using Map to ensure uniqueness by key
+        const subcategoryMap = new Map<string, { category: string; subCategory: string; key: string }>();
+        
+        items.forEach(item => {
+          const key = `${item.category}-${item.subCategory}`;
+          if (!subcategoryMap.has(key)) {
+            subcategoryMap.set(key, {
+              category: item.category,
+              subCategory: item.subCategory,
+              key: key
+            });
+          }
+        });
+        
+        const allSubcategories = Array.from(subcategoryMap.values());
+        
+        // Sort by order
+        const sorted = allSubcategories.sort((a, b) => {
+          const orderA = data.order?.[a.key] ?? 999999;
+          const orderB = data.order?.[b.key] ?? 999999;
+          return orderA - orderB;
+        });
+        
+        setSubcategoryList(sorted);
+      }
+    } catch (error) {
+      console.error('Error fetching subcategory order:', error);
+    }
+  };
+
+  const saveItemOrder = async (category: string, subCategory: string, itemOrders: Array<{ id: number; displayOrder: number }>) => {
+    try {
+      setOrderingLoading(true);
+      const response = await fetch('/api/items/update-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemOrders }),
+      });
+
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Item order saved successfully!' });
+        fetchItems();
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: 'Failed to save item order' });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('Error saving item order:', error);
+      setMessage({ type: 'error', text: 'Error saving item order' });
+      setTimeout(() => setMessage(null), 3000);
+    } finally {
+      setOrderingLoading(false);
+    }
+  };
+
+  const saveSubcategoryOrder = async (newOrder?: Record<string, number>) => {
+    try {
+      setOrderingLoading(true);
+      const orderToSave = newOrder || subcategoryOrder;
+      const response = await fetch('/api/subcategories/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: orderToSave }),
+      });
+
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Subcategory order saved successfully!' });
+        setSubcategoryOrder(orderToSave);
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: 'Failed to save subcategory order' });
+        setTimeout(() => setMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('Error saving subcategory order:', error);
+      setMessage({ type: 'error', text: 'Error saving subcategory order' });
+      setTimeout(() => setMessage(null), 3000);
+    } finally {
+      setOrderingLoading(false);
+    }
+  };
+
+  const handleSubcategoryDragStart = (e: React.DragEvent, key: string) => {
+    setDraggedSubcategory(key);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', key);
+  };
+
+  const handleSubcategoryDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleSubcategoryDrop = (e: React.DragEvent, targetKey: string) => {
+    e.preventDefault();
+    if (!draggedSubcategory || draggedSubcategory === targetKey) {
+      setDraggedSubcategory(null);
+      return;
+    }
+
+    const currentList = [...subcategoryList];
+    const draggedIndex = currentList.findIndex(item => item.key === draggedSubcategory);
+    const targetIndex = currentList.findIndex(item => item.key === targetKey);
+
+    if (draggedIndex === -1 || targetIndex === -1) {
+      setDraggedSubcategory(null);
+      return;
+    }
+
+    // Remove dragged item and insert at target position
+    const [removed] = currentList.splice(draggedIndex, 1);
+    currentList.splice(targetIndex, 0, removed);
+
+    // Update order based on new positions
+    const newOrder: Record<string, number> = {};
+    currentList.forEach((item, index) => {
+      newOrder[item.key] = index * 10; // Use increments of 10 for flexibility
+    });
+
+    setSubcategoryList(currentList);
+    saveSubcategoryOrder(newOrder);
+    setDraggedSubcategory(null);
+  };
+
   const handleDiscountFormChange = (field: string, value: any) => {
     setDiscountForm((prev) => ({
       ...prev,
@@ -1236,7 +1377,7 @@ export default function AdminPage() {
     });
   };
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-sky-50 to-cyan-50 flex items-center justify-center">
         <div className="text-center">
@@ -1247,14 +1388,33 @@ export default function AdminPage() {
     );
   }
 
+  if (!user) {
+    return null; // Will redirect via useAuth
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 to-cyan-50 py-12 px-4">
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-2xl shadow-xl p-8">
           {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold text-black mb-2">Admin Panel</h1>
-            <p className="text-gray-600">Manage charges and items</p>
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-4xl font-bold text-black mb-2">Admin Panel</h1>
+              <p className="text-gray-600">Manage charges and items</p>
+              {user && (
+                <p className="text-sm text-gray-500 mt-1">
+                  Logged in as: {user.contactNumber}
+                </p>
+              )}
+            </div>
+            {user && (
+              <button
+                onClick={logout}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-semibold"
+              >
+                Logout
+              </button>
+            )}
           </div>
 
           {/* Tabs */}
@@ -1359,6 +1519,20 @@ export default function AdminPage() {
                   {cart.reduce((sum, item) => sum + item.quantity, 0)}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('ordering');
+                setMessage(null);
+                fetchSubcategoryOrder();
+              }}
+              className={`px-6 py-3 font-semibold transition-colors ${
+                activeTab === 'ordering'
+                  ? 'text-sky-500 border-b-2 border-sky-500'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              Ordering
             </button>
           </div>
 
@@ -3156,6 +3330,186 @@ export default function AdminPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Ordering Tab */}
+          {activeTab === 'ordering' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border-2 border-sky-100 p-6 shadow-sm">
+                <h2 className="text-2xl font-bold text-black mb-6">Manage Display Order</h2>
+                <p className="text-gray-600 mb-6">
+                  Control the order in which items and subcategories appear on the main page.
+                </p>
+
+                {/* Subcategory Ordering */}
+                <div className="mb-8">
+                  <h3 className="text-xl font-bold text-black mb-4">Subcategory Order</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Drag and drop subcategories to reorder them. The order shown here is how they appear on the main page.
+                  </p>
+                  
+                  <div className="space-y-2">
+                    {subcategoryList.map(({ category, subCategory, key }) => (
+                      <div
+                        key={key}
+                        draggable
+                        onDragStart={(e) => handleSubcategoryDragStart(e, key)}
+                        onDragOver={handleSubcategoryDragOver}
+                        onDrop={(e) => handleSubcategoryDrop(e, key)}
+                        className={`flex items-center gap-4 p-4 rounded-lg border-2 transition-all cursor-move ${
+                          draggedSubcategory === key
+                            ? 'opacity-50 border-sky-400 bg-sky-100'
+                            : 'bg-gray-50 border-gray-200 hover:border-sky-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 flex-1">
+                          <div className="text-2xl text-gray-400">☰</div>
+                          <div>
+                            <span className="font-semibold text-black capitalize">{category}</span>
+                            <span className="text-gray-600 mx-2">-</span>
+                            <span className="font-semibold text-black capitalize">{subCategory}</span>
+                          </div>
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Position: {subcategoryList.findIndex(item => item.key === key) + 1}
+                        </div>
+                      </div>
+                    ))}
+                    {subcategoryList.length === 0 && (
+                      <div className="text-center py-8 text-gray-500">
+                        No subcategories found. Add items first.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Item Ordering by Subcategory */}
+                <div>
+                  <h3 className="text-xl font-bold text-black mb-4">Item Order Within Subcategories</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Drag and drop items within each subcategory to reorder them. The order shown here is how they appear on the main page.
+                  </p>
+
+                  {(() => {
+                    const groupedBySubcategory: Record<string, FoodItem[]> = {};
+                    items.forEach(item => {
+                      const key = `${item.category}-${item.subCategory}`;
+                      if (!groupedBySubcategory[key]) {
+                        groupedBySubcategory[key] = [];
+                      }
+                      groupedBySubcategory[key].push(item);
+                    });
+
+                    const handleItemDragStart = (e: React.DragEvent, itemId: number, subcategoryKey: string) => {
+                      setDraggedItem({ itemId, subcategoryKey });
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/html', itemId.toString());
+                    };
+
+                    const handleItemDragOver = (e: React.DragEvent) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                    };
+
+                    const handleItemDrop = (e: React.DragEvent, targetItemId: number, subcategoryKey: string) => {
+                      e.preventDefault();
+                      if (!draggedItem || draggedItem.subcategoryKey !== subcategoryKey || draggedItem.itemId === targetItemId) {
+                        setDraggedItem(null);
+                        return;
+                      }
+
+                      const subItems = groupedBySubcategory[subcategoryKey];
+                      const sortedItems = [...subItems].sort((a, b) => {
+                        const orderA = a.displayOrder ?? a.id ?? 0;
+                        const orderB = b.displayOrder ?? b.id ?? 0;
+                        return orderA - orderB;
+                      });
+
+                      const draggedIndex = sortedItems.findIndex(item => item.id === draggedItem.itemId);
+                      const targetIndex = sortedItems.findIndex(item => item.id === targetItemId);
+
+                      if (draggedIndex === -1 || targetIndex === -1) {
+                        setDraggedItem(null);
+                        return;
+                      }
+
+                      // Remove dragged item and insert at target position
+                      const [removed] = sortedItems.splice(draggedIndex, 1);
+                      sortedItems.splice(targetIndex, 0, removed);
+
+                      // Update order based on new positions
+                      const itemOrders = sortedItems.map((item, idx) => ({
+                        id: item.id,
+                        displayOrder: idx * 10 // Use increments of 10 for flexibility
+                      }));
+
+                      const [category, subCategory] = subcategoryKey.split('-');
+                      saveItemOrder(category, subCategory, itemOrders);
+                      setDraggedItem(null);
+                    };
+
+                    return (
+                      <div className="space-y-6">
+                        {Object.entries(groupedBySubcategory).map(([key, subItems]) => {
+                          const [category, subCategory] = key.split('-');
+                          const sortedItems = [...subItems].sort((a, b) => {
+                            const orderA = a.displayOrder ?? a.id ?? 0;
+                            const orderB = b.displayOrder ?? b.id ?? 0;
+                            return orderA - orderB;
+                          });
+
+                          return (
+                            <div key={key} className="bg-gray-50 rounded-xl border-2 border-gray-200 p-4">
+                              <h4 className="font-bold text-black mb-4 capitalize text-lg">
+                                {category} - {subCategory}
+                              </h4>
+                              <div className="space-y-2">
+                                {sortedItems.map((item, index) => (
+                                  <div
+                                    key={item.id}
+                                    draggable
+                                    onDragStart={(e) => handleItemDragStart(e, item.id, key)}
+                                    onDragOver={handleItemDragOver}
+                                    onDrop={(e) => handleItemDrop(e, item.id, key)}
+                                    className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all cursor-move ${
+                                      draggedItem?.itemId === item.id && draggedItem?.subcategoryKey === key
+                                        ? 'opacity-50 border-sky-400 bg-sky-100'
+                                        : 'bg-white border-gray-200 hover:border-sky-300 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    <div className="text-xl text-gray-400">☰</div>
+                                    <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0">
+                                      <Image
+                                        src={item.image}
+                                        alt={item.name}
+                                        fill
+                                        className="object-cover"
+                                        unoptimized
+                                      />
+                                    </div>
+                                    <div className="flex-1">
+                                      <span className="font-semibold text-black">{item.name}</span>
+                                    </div>
+                                    <div className="text-sm text-gray-500">
+                                      Position: {index + 1}
+                                    </div>
+                                  </div>
+                                ))}
+                                {sortedItems.length === 0 && (
+                                  <div className="text-center py-4 text-gray-500 text-sm">
+                                    No items in this subcategory
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
           )}

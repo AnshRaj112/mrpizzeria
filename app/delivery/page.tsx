@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { useAuth } from '@/lib/useAuth';
 
 export default function DeliveryPage() {
+  const { user, loading: authLoading, logout } = useAuth('delivery');
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -59,14 +61,44 @@ export default function DeliveryPage() {
     }
   };
 
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 to-cyan-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-sky-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-black text-lg">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null; // Will redirect via useAuth
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-cyan-50 to-blue-50">
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-6xl mx-auto">
           {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold text-black mb-2">🚚 Delivery Dashboard</h1>
-            <p className="text-gray-600">Orders ready for delivery</p>
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-4xl font-bold text-black mb-2">🚚 Delivery Dashboard</h1>
+              <p className="text-gray-600">Orders ready for delivery</p>
+              {user && (
+                <p className="text-sm text-gray-500 mt-1">
+                  Logged in as: {user.contactNumber}
+                </p>
+              )}
+            </div>
+            {user && (
+              <button
+                onClick={logout}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-semibold"
+              >
+                Logout
+              </button>
+            )}
           </div>
 
           {/* Message */}
